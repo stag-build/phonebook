@@ -1,0 +1,8 @@
+{
+  "appName": "Phonebook Android Sample",
+  "platform": "android",
+  "android": {
+    "modules": [":app"],
+    "variant": "debug"
+  }
+}

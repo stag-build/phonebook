@@ -1,0 +1,30 @@
+{
+  "name": "@stag/phonebook",
+  "version": "0.1.0",
+  "description": "Storybook-style static gallery generated from Compose @Preview / SwiftUI #Preview screenshots",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "phonebook": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "dev": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

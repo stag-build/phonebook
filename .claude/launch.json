@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "python3 -m http.server \"${PORT:-8642}\" -d samples/android/phonebook-site"
+      ],
+      "port": 8642,
+      "autoPort": true
+    }
+  ]
+}
