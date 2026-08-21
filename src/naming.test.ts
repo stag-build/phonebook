@@ -56,6 +56,7 @@ describe('parseRoborazziFileName', () => {
     );
     expect(m.functionName).toBe('PrimaryButtonEnabledPreview');
     expect(m.displayName).toBe('Button/Enabled');
+    expect(m.sourceFile).toBe('dev/stag/phonebook/sample/PrimaryButton.kt');
   });
 
   it('maps NIGHT suffix to dark theme', () => {

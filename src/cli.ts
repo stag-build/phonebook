@@ -2,6 +2,8 @@
 import { Command } from 'commander';
 import { resolve } from 'node:path';
 import { loadConfig } from './config.js';
+import { runDoctor } from './commands/doctor.js';
+import { runInit } from './commands/init.js';
 import { generateAndroid } from './engines/android.js';
 import { generateIos } from './engines/ios.js';
 import { buildSite } from './site/build.js';
@@ -34,6 +36,23 @@ program
     const outDir = resolve(opts.output);
     const count = await buildSite(resolve(bundle), outDir);
     console.log(`Built gallery with ${count} screenshots -> ${outDir}/index.html`);
+  });
+
+program
+  .command('init')
+  .description('Detect the platform and scaffold phonebook.config.json')
+  .option('-C, --dir <dir>', 'project directory to initialize', '.')
+  .action(async (opts: { dir: string }) => {
+    await runInit(opts.dir);
+  });
+
+program
+  .command('doctor')
+  .description('Check that the project is correctly set up for `phonebook generate`')
+  .option('-C, --dir <dir>', 'project directory containing phonebook.config.json', '.')
+  .action(async (opts: { dir: string }) => {
+    const ok = await runDoctor(opts.dir);
+    if (!ok) process.exit(1);
   });
 
 program.parseAsync().catch((err: Error) => {

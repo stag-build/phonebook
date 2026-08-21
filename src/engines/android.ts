@@ -62,6 +62,7 @@ export async function generateAndroid(
         component,
         state,
         module,
+        ...(meta.sourceFile ? { sourceFile: meta.sourceFile } : {}),
         previewName: meta.fqn,
         image: `images/${imageName}`,
         ...(meta.theme ? { theme: meta.theme } : {}),
@@ -90,6 +91,8 @@ interface RoborazziImageMeta {
   functionName: string;
   displayName?: string;
   theme?: 'light' | 'dark';
+  /** Derived from the package + file-class segments, e.g. "dev/stag/sample/PrimaryButton.kt" */
+  sourceFile?: string;
 }
 
 /**
@@ -115,6 +118,11 @@ export function parseRoborazziFileName(file: string): RoborazziImageMeta {
   let fnIndex = dotParts.findIndex((p) => p.endsWith('Kt')) + 1;
   if (fnIndex <= 0 || fnIndex >= dotParts.length) fnIndex = dotParts.length - 1;
   const functionName = dotParts[fnIndex];
+  const fileClass = dotParts[fnIndex - 1];
+  const sourceFile =
+    fileClass?.endsWith('Kt') && fnIndex >= 1
+      ? [...dotParts.slice(0, fnIndex - 1), `${fileClass.slice(0, -2)}.kt`].join('/')
+      : undefined;
   const nameParts = [...dotParts.slice(fnIndex + 1), ...restPath];
   let displayName: string | undefined = nameParts.length > 0 ? nameParts.join('/') : undefined;
 
@@ -124,7 +132,7 @@ export function parseRoborazziFileName(file: string): RoborazziImageMeta {
     displayName = undefined;
   }
 
-  return { fqn, functionName, displayName, theme };
+  return { fqn, functionName, displayName, theme, sourceFile };
 }
 
 function runGradle(projectDir: string, tasks: string[]): Promise<void> {
