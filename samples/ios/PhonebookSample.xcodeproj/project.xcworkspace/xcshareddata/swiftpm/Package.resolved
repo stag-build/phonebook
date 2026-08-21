@@ -1,0 +1,33 @@
+{
+  "originHash" : "c6ccddd6b85af77dadeae7e977a0c0ad28555195cb448658e4304ec7fc2d800b",
+  "pins" : [
+    {
+      "identity" : "flyingfox",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swhitty/FlyingFox.git",
+      "state" : {
+        "revision" : "f7829d4aca8cbfecb410a1cce872b1b045224aa1",
+        "version" : "0.16.0"
+      }
+    },
+    {
+      "identity" : "simpledebugger",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/EmergeTools/SimpleDebugger.git",
+      "state" : {
+        "revision" : "f065263eb5db95874b690408d136b573c939db9e",
+        "version" : "1.0.0"
+      }
+    },
+    {
+      "identity" : "snapshotpreviews",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/getsentry/SnapshotPreviews",
+      "state" : {
+        "branch" : "main",
+        "revision" : "856a1c1585e31d4113c019050d6d0712cf6ddadc"
+      }
+    }
+  ],
+  "version" : 3
+}

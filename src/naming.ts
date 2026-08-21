@@ -20,7 +20,10 @@ export function parsePreviewName(functionName: string, displayName?: string): Co
   if (name) {
     const slash = name.indexOf('/');
     if (slash > 0 && slash < name.length - 1) {
-      return { component: name.slice(0, slash).trim(), state: name.slice(slash + 1).trim() };
+      return {
+        component: spaceCamelCase(name.slice(0, slash).trim()),
+        state: name.slice(slash + 1).trim(),
+      };
     }
     return { component, state: name };
   }

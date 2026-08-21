@@ -14,6 +14,15 @@ export interface PhonebookConfig {
     /** Gradle build variant used for recording. Default: "debug" */
     variant?: string;
   };
+  ios?: {
+    /** Xcode project (.xcodeproj) or workspace path, relative to the config file. */
+    project?: string;
+    workspace?: string;
+    /** Scheme containing the SnapshotPreviews test target. Required for iOS. */
+    scheme?: string;
+    /** Simulator destination name. Default: "iPhone 17 Pro" */
+    simulator?: string;
+  };
 }
 
 export async function loadConfig(dir: string): Promise<{ config: PhonebookConfig; projectDir: string }> {

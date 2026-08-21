@@ -1,0 +1,53 @@
+import { describe, expect, it } from 'vitest';
+import { mapSidecar } from './ios.js';
+
+const sidecar = (over: object = {}, preview: object = {}) => ({
+  display_name: 'UserCard/Dark',
+  group: 'PhonebookSample/UserCard.swift',
+  context: {
+    preview: { container_display_name: 'User Card', preferred_color_scheme: 'dark', ...preview },
+    simulator: { device_name: 'iPhone 17 Pro' },
+  },
+  ...over,
+});
+
+describe('mapSidecar', () => {
+  it('maps slash display name to component/state with camel spacing', () => {
+    const e = mapSidecar('x.png', sidecar());
+    expect(e.component).toBe('User Card');
+    expect(e.state).toBe('Dark');
+    expect(e.theme).toBe('dark');
+    expect(e.module).toBe('PhonebookSample');
+    expect(e.sourceFile).toBe('PhonebookSample/UserCard.swift');
+    expect(e.device).toBe('iPhone 17 Pro');
+  });
+
+  it('treats auto "At line #N" names as unnamed previews', () => {
+    const e = mapSidecar(
+      'c.png',
+      sidecar(
+        { display_name: 'At line #14', group: 'PhonebookSample/ContentView.swift' },
+        { container_display_name: 'Content View', preferred_color_scheme: undefined },
+      ),
+    );
+    expect(e.component).toBe('Content View');
+    expect(e.state).toBe('Default');
+    expect(e.theme).toBeUndefined();
+  });
+
+  it('survives an empty sidecar by falling back to the file name', () => {
+    const e = mapSidecar('PhonebookSample_StatusBadge.swift_Badge_Success.png', {});
+    expect(e.component.length).toBeGreaterThan(0);
+    expect(e.state).toBe('Default');
+    expect(e.module).toBe('app');
+  });
+
+  it('uses a plain display name as the state', () => {
+    const e = mapSidecar(
+      'b.png',
+      sidecar({ display_name: 'Loading' }, { preferred_color_scheme: undefined }),
+    );
+    expect(e.component).toBe('User Card');
+    expect(e.state).toBe('Loading');
+  });
+});

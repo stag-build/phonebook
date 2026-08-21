@@ -1,0 +1,9 @@
+{
+  "appName": "Phonebook iOS Sample",
+  "platform": "ios",
+  "ios": {
+    "project": "PhonebookSample.xcodeproj",
+    "scheme": "PhonebookSample",
+    "simulator": "iPhone 17 Pro"
+  }
+}

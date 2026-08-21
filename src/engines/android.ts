@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
 import { parsePreviewName } from '../naming.js';
+import { gitInfo } from './git.js';
 
 /**
  * Runs Roborazzi (with ComposablePreviewScanner-generated tests) via Gradle and
@@ -75,7 +76,7 @@ export async function generateAndroid(
     platform: 'android',
     app: {
       name: config.appName,
-      commit: await gitCommit(projectDir),
+      ...(await gitInfo(projectDir)),
       generatedAt: new Date().toISOString(),
     },
     entries,
@@ -140,12 +141,3 @@ function runGradle(projectDir: string, tasks: string[]): Promise<void> {
   });
 }
 
-async function gitCommit(projectDir: string): Promise<string | undefined> {
-  return new Promise((res) => {
-    const child = spawn('git', ['rev-parse', 'HEAD'], { cwd: projectDir });
-    let out = '';
-    child.stdout.on('data', (d) => (out += d));
-    child.on('error', () => res(undefined));
-    child.on('exit', (code) => res(code === 0 ? out.trim() : undefined));
-  });
-}

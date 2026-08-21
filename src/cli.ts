@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { resolve } from 'node:path';
 import { loadConfig } from './config.js';
 import { generateAndroid } from './engines/android.js';
+import { generateIos } from './engines/ios.js';
 import { buildSite } from './site/build.js';
 
 const program = new Command();
@@ -19,12 +20,9 @@ program
   .action(async (opts: { dir: string; output?: string }) => {
     const { config, projectDir } = await loadConfig(opts.dir);
     const outputDir = resolve(projectDir, opts.output ?? config.output ?? 'phonebook-out');
-    if (config.platform === 'android') {
-      const manifest = await generateAndroid(config, projectDir, outputDir);
-      console.log(`Recorded ${manifest.entries.length} previews -> ${outputDir}`);
-    } else {
-      throw new Error('iOS generation is not implemented yet (M2)');
-    }
+    const generate = config.platform === 'android' ? generateAndroid : generateIos;
+    const manifest = await generate(config, projectDir, outputDir);
+    console.log(`Recorded ${manifest.entries.length} previews -> ${outputDir}`);
   });
 
 program
