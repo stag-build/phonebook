@@ -15,13 +15,14 @@ export async function generateAndroid(
   config: PhonebookConfig,
   projectDir: string,
   outputDir: string,
+  options: { quiet?: boolean } = {},
 ): Promise<Manifest> {
   const modules = config.android?.modules ?? [':app'];
   const variant = config.android?.variant ?? 'debug';
   const variantCap = variant[0].toUpperCase() + variant.slice(1);
 
   const tasks = modules.map((m) => `${m}:recordRoborazzi${variantCap}`);
-  await runGradle(projectDir, tasks);
+  await runGradle(projectDir, tasks, options.quiet ?? false);
 
   const imagesDir = join(outputDir, 'images');
   await mkdir(imagesDir, { recursive: true });
@@ -135,17 +136,40 @@ export function parseRoborazziFileName(file: string): RoborazziImageMeta {
   return { fqn, functionName, displayName, theme, sourceFile };
 }
 
-function runGradle(projectDir: string, tasks: string[]): Promise<void> {
+/**
+ * Runs Gradle. When `quiet` is false (the CLI default), output streams straight
+ * to this process's stdout/stderr so a human can watch the build. When `quiet`
+ * is true (used by the MCP server, whose stdout is the JSON-RPC channel and
+ * must never carry build output), output is captured instead and only the
+ * last ~50 lines are written to stderr if the build fails.
+ */
+function runGradle(projectDir: string, tasks: string[], quiet: boolean): Promise<void> {
   return new Promise((res, rej) => {
     const gradlew = resolve(projectDir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
     const child = spawn(gradlew, [...tasks, '--stacktrace'], {
       cwd: projectDir,
-      stdio: 'inherit',
+      stdio: quiet ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     });
+
+    let tail: string[] = [];
+    if (quiet) {
+      const capture = (data: Buffer) => {
+        tail.push(...data.toString('utf8').split('\n'));
+        if (tail.length > 50) tail = tail.slice(-50);
+      };
+      child.stdout?.on('data', capture);
+      child.stderr?.on('data', capture);
+    }
+
     child.on('error', (err) => rej(new Error(`Failed to run ${gradlew}: ${err.message}`)));
-    child.on('exit', (code) =>
-      code === 0 ? res() : rej(new Error(`Gradle failed (exit ${code}) running: ${tasks.join(' ')}`)),
-    );
+    child.on('exit', (code) => {
+      if (code === 0) {
+        res();
+        return;
+      }
+      if (quiet && tail.length > 0) process.stderr.write(tail.join('\n') + '\n');
+      rej(new Error(`Gradle failed (exit ${code}) running: ${tasks.join(' ')}`));
+    });
   });
 }
 

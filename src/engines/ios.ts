@@ -20,6 +20,7 @@ export async function generateIos(
   config: PhonebookConfig,
   projectDir: string,
   outputDir: string,
+  options: { quiet?: boolean } = {},
 ): Promise<Manifest> {
   const ios = config.ios;
   if (!ios?.scheme) throw new Error('phonebook.config.json: "ios.scheme" is required');
@@ -38,10 +39,15 @@ export async function generateIos(
       '-destination',
       `platform=iOS Simulator,name=${simulator}`,
     ];
-    await runXcodebuild(projectDir, args, {
-      TEST_RUNNER_SNAPSHOTS_EXPORT_DIR: exportDir,
-      TEST_RUNNER_SNAPSHOTS_RUNNING_FOR_PREVIEWS: '1',
-    });
+    await runXcodebuild(
+      projectDir,
+      args,
+      {
+        TEST_RUNNER_SNAPSHOTS_EXPORT_DIR: exportDir,
+        TEST_RUNNER_SNAPSHOTS_RUNNING_FOR_PREVIEWS: '1',
+      },
+      options.quiet ?? false,
+    );
 
     const imagesDir = join(outputDir, 'images');
     await mkdir(imagesDir, { recursive: true });
@@ -134,17 +140,44 @@ export function mapSidecar(png: string, sidecar: SnapshotSidecar): Omit<Manifest
   };
 }
 
-function runXcodebuild(cwd: string, args: string[], env: Record<string, string>): Promise<void> {
+/**
+ * Runs xcodebuild. When `quiet` is false (the CLI default), output streams
+ * straight to this process's stdout/stderr so a human can watch the build.
+ * When `quiet` is true (used by the MCP server, whose stdout is the JSON-RPC
+ * channel and must never carry build output), output is captured instead and
+ * only the last ~50 lines are written to stderr if the build fails.
+ */
+function runXcodebuild(
+  cwd: string,
+  args: string[],
+  env: Record<string, string>,
+  quiet: boolean,
+): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('xcodebuild', args, {
       cwd: resolve(cwd),
-      stdio: 'inherit',
+      stdio: quiet ? ['ignore', 'pipe', 'pipe'] : 'inherit',
       env: { ...process.env, ...env },
     });
+
+    let tail: string[] = [];
+    if (quiet) {
+      const capture = (data: Buffer) => {
+        tail.push(...data.toString('utf8').split('\n'));
+        if (tail.length > 50) tail = tail.slice(-50);
+      };
+      child.stdout?.on('data', capture);
+      child.stderr?.on('data', capture);
+    }
+
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code === 0) resolvePromise();
-      else reject(new Error(`xcodebuild failed (exit ${code}) running: xcodebuild ${args.join(' ')}`));
+      if (code === 0) {
+        resolvePromise();
+        return;
+      }
+      if (quiet && tail.length > 0) process.stderr.write(tail.join('\n') + '\n');
+      reject(new Error(`xcodebuild failed (exit ${code}) running: xcodebuild ${args.join(' ')}`));
     });
   });
 }

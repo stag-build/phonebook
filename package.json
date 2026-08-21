@@ -19,7 +19,9 @@
     "dev": "tsx src/cli.ts"
   },
   "dependencies": {
-    "commander": "^12.1.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^12.1.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

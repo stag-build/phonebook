@@ -7,6 +7,7 @@ import { runInit } from './commands/init.js';
 import { generateAndroid } from './engines/android.js';
 import { generateIos } from './engines/ios.js';
 import { buildSite } from './site/build.js';
+import { runMcpServer } from './mcp/server.js';
 
 const program = new Command();
 
@@ -53,6 +54,13 @@ program
   .action(async (opts: { dir: string }) => {
     const ok = await runDoctor(opts.dir);
     if (!ok) process.exit(1);
+  });
+
+program
+  .command('mcp')
+  .description('Run the Phonebook MCP server (stdio)')
+  .action(async () => {
+    await runMcpServer();
   });
 
 program.parseAsync().catch((err: Error) => {

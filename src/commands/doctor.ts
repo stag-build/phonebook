@@ -71,16 +71,31 @@ export function parseAvailableSimulatorNames(simctlOutput: string): string[] {
   return names;
 }
 
-function print(name: string, result: CheckResult): boolean {
+/**
+ * A single doctor check line plus whether the check passed. Collected instead of
+ * printed directly so the same core logic can back both the CLI command
+ * (byte-identical console output) and the MCP `check_setup` tool.
+ */
+function formatLine(name: string, result: CheckResult): { line: string; ok: boolean } {
   if (result.note !== undefined) {
-    console.log(`note ${name}: ${result.note}`);
-    return true;
+    return { line: `note ${name}: ${result.note}`, ok: true };
   }
-  console.log(`${result.ok ? 'ok' : 'FAIL'} ${name}: ${result.detail}`);
-  return result.ok;
+  return { line: `${result.ok ? 'ok' : 'FAIL'} ${name}: ${result.detail}`, ok: result.ok };
 }
 
-export async function runDoctor(dir: string): Promise<boolean> {
+/**
+ * Runs the same checks as `phonebook doctor` and returns the printed lines plus
+ * overall pass/fail, without writing to stdout. Shared by the CLI command and
+ * the MCP `check_setup` tool.
+ */
+export async function collectDoctorChecks(dir: string): Promise<{ lines: string[]; ok: boolean }> {
+  const lines: string[] = [];
+  const print = (name: string, result: CheckResult): boolean => {
+    const { line, ok } = formatLine(name, result);
+    lines.push(line);
+    return ok;
+  };
+
   const projectDir = resolve(dir);
   let config: PhonebookConfig;
   try {
@@ -88,14 +103,21 @@ export async function runDoctor(dir: string): Promise<boolean> {
     config = loaded.config;
   } catch (err) {
     print('config', { ok: false, detail: `${(err as Error).message}` });
-    return false;
+    return { lines, ok: false };
   }
   print('config', { ok: true, detail: 'phonebook.config.json is valid' });
 
-  if (config.platform === 'android') {
-    return runAndroidChecks(config, projectDir);
-  }
-  return runIosChecks(config, projectDir);
+  const ok =
+    config.platform === 'android'
+      ? await runAndroidChecks(config, projectDir, print)
+      : await runIosChecks(config, projectDir, print);
+  return { lines, ok };
+}
+
+export async function runDoctor(dir: string): Promise<boolean> {
+  const { lines, ok } = await collectDoctorChecks(dir);
+  for (const line of lines) console.log(line);
+  return ok;
 }
 
 async function gradleFileTexts(projectDir: string, modules: string[]): Promise<string> {
@@ -116,7 +138,9 @@ async function gradleFileTexts(projectDir: string, modules: string[]): Promise<s
   return texts.join('\n');
 }
 
-async function runAndroidChecks(config: PhonebookConfig, projectDir: string): Promise<boolean> {
+type PrintFn = (name: string, result: CheckResult) => boolean;
+
+async function runAndroidChecks(config: PhonebookConfig, projectDir: string, print: PrintFn): Promise<boolean> {
   let allOk = true;
 
   const gradlewName = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew';
@@ -177,7 +201,7 @@ async function runAndroidChecks(config: PhonebookConfig, projectDir: string): Pr
   return allOk;
 }
 
-async function runIosChecks(config: PhonebookConfig, projectDir: string): Promise<boolean> {
+async function runIosChecks(config: PhonebookConfig, projectDir: string, print: PrintFn): Promise<boolean> {
   let allOk = true;
   const ios = config.ios;
   if (!ios?.scheme || (!ios.project && !ios.workspace)) {
