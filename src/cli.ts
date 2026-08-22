@@ -51,8 +51,9 @@ program
   .command('doctor')
   .description('Check that the project is correctly set up for `phonebook generate`')
   .option('-C, --dir <dir>', 'project directory containing phonebook.config.json', '.')
-  .action(async (opts: { dir: string }) => {
-    const ok = await runDoctor(opts.dir);
+  .option('--deep', 'also compile the test sources (slower, catches build-time errors)', false)
+  .action(async (opts: { dir: string; deep: boolean }) => {
+    const ok = await runDoctor(opts.dir, { deep: opts.deep });
     if (!ok) process.exit(1);
   });
 

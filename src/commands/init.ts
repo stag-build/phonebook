@@ -1,6 +1,15 @@
 import { access, readdir, writeFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
+import { detectKotlinVersion, resolveMaxCompatible } from '../versions.js';
+
+const ROBORAZZI_GROUP = 'io.github.takahirom.roborazzi';
+const ROBORAZZI_ARTIFACT = 'roborazzi';
+const CPS_GROUP = 'io.github.sergio-sastre.ComposablePreviewScanner';
+const CPS_ARTIFACT = 'android';
+
+const DEFAULT_ROBORAZZI_VERSION = '1.72.0';
+const DEFAULT_CPS_VERSION = '0.9.3';
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -84,20 +93,46 @@ export async function runInit(dir: string): Promise<void> {
   }
 
   if (detected.platform === 'android') {
-    printAndroidInstructions();
+    await printAndroidInstructions(projectDir);
   } else {
     printIosInstructions();
   }
 }
 
-function printAndroidInstructions(): void {
+async function printAndroidInstructions(projectDir: string): Promise<void> {
+  const detected = await detectKotlinVersion(projectDir);
+
+  let roborazziVersion = DEFAULT_ROBORAZZI_VERSION;
+  let cpsVersion = DEFAULT_CPS_VERSION;
+  let note: string | undefined;
+
+  if (detected) {
+    const [roborazzi, cps] = await Promise.all([
+      resolveMaxCompatible(ROBORAZZI_GROUP, ROBORAZZI_ARTIFACT, detected.version),
+      resolveMaxCompatible(CPS_GROUP, CPS_ARTIFACT, detected.version),
+    ]);
+    if (roborazzi.best) roborazziVersion = roborazzi.best;
+    if (cps.best) cpsVersion = cps.best;
+
+    const kotlinLabel = `${detected.version.major}.${detected.version.minor}.${detected.version.patch}`;
+    if (roborazzi.best && roborazzi.latest && roborazzi.best !== roborazzi.latest) {
+      note =
+        `note: Roborazzi ${roborazzi.latest} is available but requires Kotlin >= ${roborazzi.latestNeedsKotlin}; ` +
+        `your project uses ${kotlinLabel} (${detected.source}). Using ${roborazzi.best}. Upgrade Kotlin to use the latest.`;
+    }
+  } else {
+    note = `note: could not detect this project's Kotlin version; using Roborazzi ${DEFAULT_ROBORAZZI_VERSION} / ` +
+      `ComposablePreviewScanner ${DEFAULT_CPS_VERSION}. Verify these are compatible with your Kotlin version, or ` +
+      'run `phonebook doctor` after wiring things up.';
+  }
+
   console.log(`
 Next steps to wire up Roborazzi preview recording:
 
 1. In the root build.gradle.kts, add the Roborazzi plugin:
 
      plugins {
-       id("io.github.takahirom.roborazzi") version "1.72.0" apply false
+       id("io.github.takahirom.roborazzi") version "${roborazziVersion}" apply false
      }
 
 2. In each recorded module's build.gradle.kts, apply the plugin and add:
@@ -107,11 +142,13 @@ Next steps to wire up Roborazzi preview recording:
      }
 
      dependencies {
-       testImplementation("io.github.takahirom.roborazzi:roborazzi:1.72.0")
-       testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.72.0")
-       testImplementation("io.github.takahirom.roborazzi:roborazzi-compose-preview-scanner-support:1.72.0")
-       testImplementation("io.github.sergio-sastre.ComposablePreviewScanner:android:0.9.3")
+       testImplementation("io.github.takahirom.roborazzi:roborazzi:${roborazziVersion}")
+       testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:${roborazziVersion}")
+       testImplementation("io.github.takahirom.roborazzi:roborazzi-compose-preview-scanner-support:${roborazziVersion}")
+       testImplementation("io.github.sergio-sastre.ComposablePreviewScanner:android:${cpsVersion}")
        testImplementation("org.robolectric:robolectric:4.14.1")
+       // version from your Compose BOM, or pin one
+       testImplementation("androidx.compose.ui:ui-test-junit4")
      }
 
      @OptIn(ExperimentalRoborazziApi::class)
@@ -135,7 +172,7 @@ Next steps to wire up Roborazzi preview recording:
      }
 
 3. Run \`phonebook doctor\` to verify the setup.
-`);
+${note ? `\n${note}\n` : ''}`);
 }
 
 function printIosInstructions(): void {

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
+import { diagnoseGradleFailure } from '../errors.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
 import { parsePreviewName } from '../naming.js';
 import { gitInfo } from './git.js';
@@ -137,29 +138,30 @@ export function parseRoborazziFileName(file: string): RoborazziImageMeta {
 }
 
 /**
- * Runs Gradle. When `quiet` is false (the CLI default), output streams straight
- * to this process's stdout/stderr so a human can watch the build. When `quiet`
- * is true (used by the MCP server, whose stdout is the JSON-RPC channel and
- * must never carry build output), output is captured instead and only the
- * last ~50 lines are written to stderr if the build fails.
+ * Runs Gradle. When `quiet` is false (the CLI default), output streams
+ * straight through to this process's stdout/stderr as it arrives (so a human
+ * can watch the build) while a rolling tail is kept alongside it for error
+ * translation. When `quiet` is true (used by the MCP server, whose stdout is
+ * the JSON-RPC channel and must never carry build output), only the tail is
+ * kept and nothing is echoed live; the tail is written to stderr once if the
+ * build fails.
  */
-function runGradle(projectDir: string, tasks: string[], quiet: boolean): Promise<void> {
+export function runGradle(projectDir: string, tasks: string[], quiet: boolean): Promise<void> {
   return new Promise((res, rej) => {
     const gradlew = resolve(projectDir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
     const child = spawn(gradlew, [...tasks, '--stacktrace'], {
       cwd: projectDir,
-      stdio: quiet ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let tail: string[] = [];
-    if (quiet) {
-      const capture = (data: Buffer) => {
-        tail.push(...data.toString('utf8').split('\n'));
-        if (tail.length > 50) tail = tail.slice(-50);
-      };
-      child.stdout?.on('data', capture);
-      child.stderr?.on('data', capture);
-    }
+    const onData = (target: NodeJS.WritableStream) => (data: Buffer) => {
+      if (!quiet) target.write(data);
+      tail.push(...data.toString('utf8').split('\n'));
+      if (tail.length > 200) tail = tail.slice(-200);
+    };
+    child.stdout?.on('data', onData(process.stdout));
+    child.stderr?.on('data', onData(process.stderr));
 
     child.on('error', (err) => rej(new Error(`Failed to run ${gradlew}: ${err.message}`)));
     child.on('exit', (code) => {
@@ -167,8 +169,14 @@ function runGradle(projectDir: string, tasks: string[], quiet: boolean): Promise
         res();
         return;
       }
-      if (quiet && tail.length > 0) process.stderr.write(tail.join('\n') + '\n');
-      rej(new Error(`Gradle failed (exit ${code}) running: ${tasks.join(' ')}`));
+      const tailText = tail.join('\n');
+      const diagnosis = diagnoseGradleFailure(tailText);
+      if (diagnosis.length > 0) {
+        process.stderr.write(diagnosis.map((line) => `phonebook: ${line}`).join('\n') + '\n');
+      }
+      if (quiet && tail.length > 0) process.stderr.write(tailText + '\n');
+      const message = [`Gradle failed (exit ${code}) running: ${tasks.join(' ')}`, ...diagnosis].join('\n');
+      rej(new Error(message));
     });
   });
 }

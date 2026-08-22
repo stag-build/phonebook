@@ -147,7 +147,7 @@ export function mapSidecar(png: string, sidecar: SnapshotSidecar): Omit<Manifest
  * channel and must never carry build output), output is captured instead and
  * only the last ~50 lines are written to stderr if the build fails.
  */
-function runXcodebuild(
+export function runXcodebuild(
   cwd: string,
   args: string[],
   env: Record<string, string>,

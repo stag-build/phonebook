@@ -2,6 +2,15 @@ import { spawn } from 'node:child_process';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { loadConfig, type PhonebookConfig } from '../config.js';
+import { diagnoseGradleFailure } from '../errors.js';
+import { runGradle } from '../engines/android.js';
+import {
+  canRead,
+  detectKotlinVersion,
+  fetchKotlinMetadataVersion,
+  lookupFallbackMetadata,
+  resolveMaxCompatible,
+} from '../versions.js';
 
 interface CheckResult {
   ok: boolean;
@@ -88,7 +97,10 @@ function formatLine(name: string, result: CheckResult): { line: string; ok: bool
  * overall pass/fail, without writing to stdout. Shared by the CLI command and
  * the MCP `check_setup` tool.
  */
-export async function collectDoctorChecks(dir: string): Promise<{ lines: string[]; ok: boolean }> {
+export async function collectDoctorChecks(
+  dir: string,
+  options: { deep?: boolean } = {},
+): Promise<{ lines: string[]; ok: boolean }> {
   const lines: string[] = [];
   const print = (name: string, result: CheckResult): boolean => {
     const { line, ok } = formatLine(name, result);
@@ -107,15 +119,16 @@ export async function collectDoctorChecks(dir: string): Promise<{ lines: string[
   }
   print('config', { ok: true, detail: 'phonebook.config.json is valid' });
 
+  const deep = options.deep ?? false;
   const ok =
     config.platform === 'android'
-      ? await runAndroidChecks(config, projectDir, print)
-      : await runIosChecks(config, projectDir, print);
+      ? await runAndroidChecks(config, projectDir, print, deep)
+      : await runIosChecks(config, projectDir, print, deep);
   return { lines, ok };
 }
 
-export async function runDoctor(dir: string): Promise<boolean> {
-  const { lines, ok } = await collectDoctorChecks(dir);
+export async function runDoctor(dir: string, options: { deep?: boolean } = {}): Promise<boolean> {
+  const { lines, ok } = await collectDoctorChecks(dir, options);
   for (const line of lines) console.log(line);
   return ok;
 }
@@ -140,7 +153,18 @@ async function gradleFileTexts(projectDir: string, modules: string[]): Promise<s
 
 type PrintFn = (name: string, result: CheckResult) => boolean;
 
-async function runAndroidChecks(config: PhonebookConfig, projectDir: string, print: PrintFn): Promise<boolean> {
+const ROBORAZZI_DEP_PATTERN = /io\.github\.takahirom\.roborazzi["']?(?:roborazzi[^:]*)?:?([0-9]+\.[0-9]+\.[0-9]+)/;
+const ROBORAZZI_PLUGIN_PATTERN =
+  /(?:id\(\s*["']io\.github\.takahirom\.roborazzi["']\s*\)|id\s+["']io\.github\.takahirom\.roborazzi["'])\s+version\s+["']([0-9]+\.[0-9]+\.[0-9]+)["']/;
+const ROBORAZZI_GROUP = 'io.github.takahirom.roborazzi';
+const ROBORAZZI_ARTIFACT = 'roborazzi';
+
+async function runAndroidChecks(
+  config: PhonebookConfig,
+  projectDir: string,
+  print: PrintFn,
+  deep: boolean,
+): Promise<boolean> {
   let allOk = true;
 
   const gradlewName = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew';
@@ -198,10 +222,94 @@ async function runAndroidChecks(config: PhonebookConfig, projectDir: string, pri
     });
   }
 
+  allOk = (await runKotlinCompatCheck(projectDir, gradleText, print)) && allOk;
+
+  if (deep) {
+    allOk = (await runAndroidDeepCheck(config, projectDir, modules, print)) && allOk;
+  }
+
   return allOk;
 }
 
-async function runIosChecks(config: PhonebookConfig, projectDir: string, print: PrintFn): Promise<boolean> {
+/**
+ * Checks that the project's detected Kotlin compiler can read the declared
+ * Roborazzi version's real (bytecode) metadata. A library's POM understates
+ * its Kotlin requirement, so this uses FALLBACK / fetchKotlinMetadataVersion
+ * instead of trusting the POM.
+ */
+async function runKotlinCompatCheck(projectDir: string, gradleText: string, print: PrintFn): Promise<boolean> {
+  const detected = await detectKotlinVersion(projectDir);
+  const declaredVersion =
+    gradleText.match(ROBORAZZI_DEP_PATTERN)?.[1] ?? gradleText.match(ROBORAZZI_PLUGIN_PATTERN)?.[1];
+
+  if (!detected || !declaredVersion) {
+    print('kotlin-compat', {
+      ok: true,
+      detail: '',
+      note: 'could not detect both the project Kotlin version and the declared Roborazzi version; skipping compatibility check',
+    });
+    return true;
+  }
+
+  let metadata = lookupFallbackMetadata(ROBORAZZI_GROUP, ROBORAZZI_ARTIFACT, declaredVersion);
+  if (!metadata) {
+    metadata = await fetchKotlinMetadataVersion(ROBORAZZI_GROUP, ROBORAZZI_ARTIFACT, declaredVersion);
+  }
+
+  if (!metadata) {
+    print('kotlin-compat', {
+      ok: true,
+      detail: '',
+      note: `could not determine Roborazzi ${declaredVersion}'s Kotlin metadata version (network unavailable); skipping compatibility check`,
+    });
+    return true;
+  }
+
+  if (canRead(detected.version, metadata)) {
+    return print('kotlin-compat', {
+      ok: true,
+      detail: `Kotlin ${detected.version.major}.${detected.version.minor} can read Roborazzi ${declaredVersion}`,
+    });
+  }
+
+  const { best } = await resolveMaxCompatible(ROBORAZZI_GROUP, ROBORAZZI_ARTIFACT, detected.version);
+  const metaLabel = `${metadata[0]}.${metadata[1]}.${metadata[2]}`;
+  const needed = metadata[0] === 1 && metadata[1] === 9 && metadata[2] === 9999 ? '1.9' : `${metadata[0]}.${Math.max(0, metadata[1] - 1)}`;
+  return print('kotlin-compat', {
+    ok: false,
+    detail:
+      `Kotlin ${detected.version.major}.${detected.version.minor} cannot read Roborazzi ${declaredVersion} ` +
+      `(compiled with Kotlin ${metaLabel} metadata). Use Roborazzi ${best ?? '(unknown)'} or upgrade Kotlin to >= ${needed}.`,
+  });
+}
+
+/** `doctor --deep`: actually compiles the unit test sources via Gradle. */
+async function runAndroidDeepCheck(
+  config: PhonebookConfig,
+  projectDir: string,
+  modules: string[],
+  print: PrintFn,
+): Promise<boolean> {
+  const variant = config.android?.variant ?? 'debug';
+  const variantCap = variant[0].toUpperCase() + variant.slice(1);
+  const tasks = modules.map((m) => `${m}:compile${variantCap}UnitTestKotlin`);
+
+  console.log('deep: compiling test sources (this may take a while)...');
+  try {
+    await runGradle(projectDir, tasks, true);
+    return print('deep-compile', { ok: true, detail: `compiled: ${tasks.join(', ')}` });
+  } catch (err) {
+    // runGradle already appends diagnoseGradleFailure's lines to the message.
+    return print('deep-compile', { ok: false, detail: (err as Error).message });
+  }
+}
+
+async function runIosChecks(
+  config: PhonebookConfig,
+  projectDir: string,
+  print: PrintFn,
+  deep: boolean,
+): Promise<boolean> {
   let allOk = true;
   const ios = config.ios;
   if (!ios?.scheme || (!ios.project && !ios.workspace)) {
@@ -295,7 +403,43 @@ async function runIosChecks(config: PhonebookConfig, projectDir: string, print: 
     }) && allOk;
   }
 
+  if (deep && hasXcodebuild && pathExists) {
+    allOk = (await runIosDeepCheck(projectDir, ios, projectPath, workspacePath, simulator, print)) && allOk;
+  }
+
   return allOk;
+}
+
+/** `doctor --deep`: actually builds-for-testing via xcodebuild. */
+async function runIosDeepCheck(
+  projectDir: string,
+  ios: NonNullable<PhonebookConfig['ios']>,
+  projectPath: string | undefined,
+  workspacePath: string | undefined,
+  simulator: string,
+  print: PrintFn,
+): Promise<boolean> {
+  console.log('deep: compiling test sources (this may take a while)...');
+  const args = [
+    'build-for-testing',
+    ...(workspacePath ? ['-workspace', workspacePath] : ['-project', projectPath!]),
+    '-scheme',
+    ios.scheme!,
+    '-destination',
+    `platform=iOS Simulator,name=${simulator}`,
+  ];
+  const result = await runCapture('xcodebuild', args, { cwd: projectDir });
+  if (result.code === 0) {
+    return print('deep-compile', { ok: true, detail: `build-for-testing succeeded for scheme "${ios.scheme}"` });
+  }
+  const output = `${result.stdout}\n${result.stderr}`;
+  const diagnosis = diagnoseGradleFailure(output);
+  return print('deep-compile', {
+    ok: false,
+    detail: [`xcodebuild build-for-testing failed (exit ${result.code}) for scheme "${ios.scheme}"`, ...diagnosis].join(
+      '\n',
+    ),
+  });
 }
 
 async function readTextIfExists(path: string): Promise<string> {
