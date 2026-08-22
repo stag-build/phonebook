@@ -20,11 +20,16 @@ program
   .description('Render all previews and produce a bundle (manifest + images)')
   .option('-C, --dir <dir>', 'project directory containing phonebook.config.json', '.')
   .option('-o, --output <dir>', 'bundle output directory (default from config, else phonebook-out)')
-  .action(async (opts: { dir: string; output?: string }) => {
+  .option(
+    '--allow-empty',
+    'write an empty manifest (with a warning) instead of failing when no previews are recorded',
+    false,
+  )
+  .action(async (opts: { dir: string; output?: string; allowEmpty: boolean }) => {
     const { config, projectDir } = await loadConfig(opts.dir);
     const outputDir = resolve(projectDir, opts.output ?? config.output ?? 'phonebook-out');
     const generate = config.platform === 'android' ? generateAndroid : generateIos;
-    const manifest = await generate(config, projectDir, outputDir);
+    const manifest = await generate(config, projectDir, outputDir, { allowEmpty: opts.allowEmpty });
     console.log(`Recorded ${manifest.entries.length} previews -> ${outputDir}`);
   });
 

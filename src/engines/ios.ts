@@ -8,6 +8,15 @@ import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.j
 import { parsePreviewName, spaceCamelCase } from '../naming.js';
 import { gitInfo } from './git.js';
 
+/** Builds the error/warning text for a `generate` run that exported zero snapshots. Exported for tests. */
+export function buildEmptySnapshotsMessage(exportDir: string, scheme: string): string {
+  return (
+    `xcodebuild succeeded but no snapshots were exported to ${exportDir}. ` +
+    `Does the "${scheme}" scheme include a SnapshotPreviews test target, and are your #Preview macros not all ` +
+    'filtered out (e.g. by a snapshotPreviews() override that excludes them)?'
+  );
+}
+
 /**
  * Runs the SnapshotPreviews-backed XCTest target via xcodebuild on a simulator
  * and harvests the exported PNG + JSON sidecar pairs into a Phonebook bundle.
@@ -20,7 +29,7 @@ export async function generateIos(
   config: PhonebookConfig,
   projectDir: string,
   outputDir: string,
-  options: { quiet?: boolean } = {},
+  options: { quiet?: boolean; allowEmpty?: boolean } = {},
 ): Promise<Manifest> {
   const ios = config.ios;
   if (!ios?.scheme) throw new Error('phonebook.config.json: "ios.scheme" is required');
@@ -54,10 +63,11 @@ export async function generateIos(
 
     const pngs = (await readdir(exportDir)).filter((f) => f.endsWith('.png')).sort();
     if (pngs.length === 0) {
-      throw new Error(
-        `xcodebuild succeeded but no snapshots were exported to ${exportDir}. ` +
-          `Does the "${ios.scheme}" scheme include a SnapshotPreviews test target?`,
-      );
+      const message = buildEmptySnapshotsMessage(exportDir, ios.scheme);
+      if (!(options.allowEmpty ?? false)) {
+        throw new Error(message);
+      }
+      console.warn(`warning: ${message}`);
     }
 
     const entries: ManifestEntry[] = [];

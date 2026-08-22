@@ -238,3 +238,164 @@ androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-te
     expect(roborazziLine).toContain('FAIL roborazzi-plugin');
   });
 });
+
+// ---------------------------------------------------------------------------
+// preview-packages check
+// ---------------------------------------------------------------------------
+
+async function writeAndroidAppModule(
+  dir: string,
+  opts: { buildGradleKts: string; sources?: Record<string, string> },
+): Promise<void> {
+  await writeFile(
+    join(dir, 'phonebook.config.json'),
+    JSON.stringify({ appName: 'test', platform: 'android', android: { modules: [':app'], variant: 'debug' } }, null, 2),
+  );
+  await mkdir(join(dir, 'app'), { recursive: true });
+  await writeFile(join(dir, 'app', 'build.gradle.kts'), opts.buildGradleKts);
+  for (const [relPath, content] of Object.entries(opts.sources ?? {})) {
+    const full = join(dir, 'app', 'src', 'main', 'java', ...relPath.split('/'));
+    await mkdir(full.slice(0, full.lastIndexOf('/')), { recursive: true });
+    await writeFile(full, content);
+  }
+}
+
+describe('collectDoctorChecks: preview-packages', () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  const roborazziPlugin = `
+plugins {
+    id("io.github.takahirom.roborazzi") version "1.72.0"
+}
+
+dependencies {
+    testImplementation("io.github.sergio-sastre.ComposablePreviewScanner:android:0.9.3")
+}
+`;
+
+  it('FAILs when no packages = listOf(...) is present at all', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-'));
+    await writeAndroidAppModule(dir, {
+      buildGradleKts: `${roborazziPlugin}
+roborazzi {
+    generateComposePreviewRobolectricTests {
+        enable = true
+    }
+}
+`,
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('preview-packages'));
+    expect(line).toContain('FAIL preview-packages');
+    expect(line).toContain('no packages = listOf(...)');
+  });
+
+  it('FAILs on a literal placeholder package left over from init instructions', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-'));
+    await writeAndroidAppModule(dir, {
+      buildGradleKts: `${roborazziPlugin}
+roborazzi {
+    generateComposePreviewRobolectricTests {
+        enable = true
+        packages = listOf("<your package>")
+    }
+}
+`,
+      sources: { 'dev/stag/sample/MainActivity.kt': 'package dev.stag.sample\n' },
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('preview-packages'));
+    expect(line).toContain('FAIL preview-packages');
+    expect(line).toContain('is a placeholder from the setup instructions');
+    expect(line).toContain('detected: dev.stag.sample');
+  });
+
+  it('FAILs on a REPLACE_ME placeholder package', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-'));
+    await writeAndroidAppModule(dir, {
+      buildGradleKts: `${roborazziPlugin}
+roborazzi {
+    generateComposePreviewRobolectricTests {
+        enable = true
+        packages = listOf("REPLACE_ME.your.app.package")
+    }
+}
+`,
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('preview-packages'));
+    expect(line).toContain('FAIL preview-packages');
+    expect(line).toContain('is a placeholder from the setup instructions');
+  });
+
+  it('FAILs when the configured package does not exist in the module sources', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-'));
+    await writeAndroidAppModule(dir, {
+      buildGradleKts: `${roborazziPlugin}
+roborazzi {
+    generateComposePreviewRobolectricTests {
+        enable = true
+        packages = listOf("dev.stag.wrong")
+    }
+}
+`,
+      sources: { 'dev/stag/sample/MainActivity.kt': 'package dev.stag.sample\n' },
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('preview-packages'));
+    expect(line).toContain('FAIL preview-packages');
+    expect(line).toContain('package "dev.stag.wrong" was not found in :app sources');
+    expect(line).toContain('detected: dev.stag.sample');
+  });
+
+  it('passes and counts @Preview annotations on the happy path', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-'));
+    await writeAndroidAppModule(dir, {
+      buildGradleKts: `${roborazziPlugin}
+roborazzi {
+    generateComposePreviewRobolectricTests {
+        enable = true
+        packages = listOf("dev.stag.sample")
+    }
+}
+`,
+      sources: {
+        'dev/stag/sample/MainActivity.kt': 'package dev.stag.sample\n',
+        'dev/stag/sample/UserCard.kt': 'package dev.stag.sample\n\n@Preview\nfun UserCardPreview() {}\n\n@Preview\nfun UserCardDarkPreview() {}\n',
+      },
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('preview-packages'));
+    expect(line).toContain('ok preview-packages');
+    expect(line).toContain('packages = listOf("dev.stag.sample")');
+    expect(line).toContain('2 @Preview annotation(s) found');
+  });
+
+  it('also accepts the Groovy packages = ["a", "b"] form', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-'));
+    await writeAndroidAppModule(dir, {
+      buildGradleKts: `${roborazziPlugin}
+roborazzi {
+    generateComposePreviewRobolectricTests {
+        enable = true
+        packages = ["dev.stag.sample"]
+    }
+}
+`,
+      sources: { 'dev/stag/sample/MainActivity.kt': 'package dev.stag.sample\n' },
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('preview-packages'));
+    expect(line).toContain('ok preview-packages');
+  });
+});

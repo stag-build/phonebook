@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapSidecar } from './ios.js';
+import { buildEmptySnapshotsMessage, mapSidecar } from './ios.js';
 
 const sidecar = (over: object = {}, preview: object = {}) => ({
   display_name: 'UserCard/Dark',
@@ -49,5 +49,15 @@ describe('mapSidecar', () => {
     );
     expect(e.component).toBe('User Card');
     expect(e.state).toBe('Loading');
+  });
+});
+
+describe('buildEmptySnapshotsMessage', () => {
+  it('mentions the export dir, the scheme, and that previews may be filtered out', () => {
+    const message = buildEmptySnapshotsMessage('/tmp/phonebook-snapshots-abc', 'PhonebookSample');
+    expect(message).toContain('/tmp/phonebook-snapshots-abc');
+    expect(message).toContain('"PhonebookSample" scheme');
+    expect(message).toContain('SnapshotPreviews test target');
+    expect(message).toContain('filtered out');
   });
 });

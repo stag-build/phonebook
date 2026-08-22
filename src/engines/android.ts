@@ -8,6 +8,23 @@ import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.j
 import { parsePreviewName } from '../naming.js';
 import { gitInfo } from './git.js';
 
+export const EMPTY_PREVIEWS_MESSAGE =
+  'No previews were recorded. Common causes: (1) packages = listOf(...) in generateComposePreviewRobolectricTests ' +
+  'does not match your app package; (2) includePrivatePreviews = true is missing and your @Preview functions are ' +
+  'private; (3) the module has no @Preview functions. Run `phonebook doctor` to check 1 and 2.';
+
+/**
+ * Guards against `generate` silently succeeding with zero recorded previews.
+ * Throws unless `allowEmpty` is set (the `--allow-empty` CLI flag), in which
+ * case the caller downgrades this to a warning and still writes the manifest.
+ * Pure/exported so it can be unit-tested without spawning Gradle.
+ */
+export function checkEmptyEntries(entryCount: number, allowEmpty: boolean): void {
+  if (entryCount === 0 && !allowEmpty) {
+    throw new Error(EMPTY_PREVIEWS_MESSAGE);
+  }
+}
+
 /**
  * Runs Roborazzi (with ComposablePreviewScanner-generated tests) via Gradle and
  * harvests the recorded PNGs into a Phonebook bundle.
@@ -16,7 +33,7 @@ export async function generateAndroid(
   config: PhonebookConfig,
   projectDir: string,
   outputDir: string,
-  options: { quiet?: boolean } = {},
+  options: { quiet?: boolean; allowEmpty?: boolean } = {},
 ): Promise<Manifest> {
   const modules = config.android?.modules ?? [':app'];
   const variant = config.android?.variant ?? 'debug';
@@ -73,6 +90,12 @@ export async function generateAndroid(
   }
 
   entries.sort((a, b) => a.component.localeCompare(b.component) || a.state.localeCompare(b.state));
+
+  const allowEmpty = options.allowEmpty ?? false;
+  checkEmptyEntries(entries.length, allowEmpty);
+  if (entries.length === 0 && allowEmpty) {
+    console.warn(`warning: ${EMPTY_PREVIEWS_MESSAGE}`);
+  }
 
   const manifest: Manifest = {
     schemaVersion: SCHEMA_VERSION,

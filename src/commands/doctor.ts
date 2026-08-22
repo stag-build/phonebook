@@ -18,6 +18,7 @@ import {
   UNIT_TEST_CONFIGURATIONS,
   type VersionCatalog,
 } from '../gradle/catalog.js';
+import { detectAndroidPackage } from './init.js';
 
 interface CheckResult {
   ok: boolean;
@@ -266,6 +267,10 @@ async function runAndroidChecks(
   }
 
   if (hasGenerateBlock) {
+    allOk = (await runPreviewPackagesCheck(projectDir, modules, print)) && allOk;
+  }
+
+  if (hasGenerateBlock) {
     const uiTestJunit4 = findLibrary(gradleText, catalogList, 'androidx.compose.ui', 'ui-test-junit4', {
       configurations: UNIT_TEST_CONFIGURATIONS,
     });
@@ -304,6 +309,139 @@ async function runAndroidChecks(
 
   if (deep) {
     allOk = (await runAndroidDeepCheck(config, projectDir, modules, print)) && allOk;
+  }
+
+  return allOk;
+}
+
+/**
+ * Extracts the values configured in a `packages = listOf(...)` (Kotlin DSL)
+ * or `packages = ["a", "b"]` (Groovy) block. Returns undefined if no
+ * `packages = ...` assignment is present at all (as opposed to an empty list).
+ */
+export function extractConfiguredPackages(gradleText: string): string[] | undefined {
+  const match = gradleText.match(/\bpackages\s*=\s*(?:listOf\(([^)]*)\)|\[([^\]]*)\])/);
+  if (!match) return undefined;
+  const body = match[1] ?? match[2] ?? '';
+  return [...body.matchAll(/["']([^"']*)["']/g)].map((m) => m[1]);
+}
+
+/** True for placeholder package values left over from the `phonebook init` setup instructions. */
+function isPlaceholderPackage(pkg: string): boolean {
+  return /^<.*>$/.test(pkg) || pkg.includes('REPLACE_ME') || pkg === 'your.package' || pkg === '<your package>';
+}
+
+interface ModuleSourceScan {
+  packages: Set<string>;
+  previewCountByPackage: Map<string, number>;
+}
+
+/** Recursively scans a module's src/main/java + src/main/kotlin trees for `package ...` declarations and @Preview annotations. */
+async function scanModuleSources(projectDir: string, module: string): Promise<ModuleSourceScan> {
+  const moduleDir = join(projectDir, ...module.split(':').filter(Boolean));
+  const packages = new Set<string>();
+  const previewCountByPackage = new Map<string, number>();
+
+  async function scanDir(dir: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await scanDir(full);
+        continue;
+      }
+      if (!entry.isFile() || !(entry.name.endsWith('.kt') || entry.name.endsWith('.java'))) continue;
+      const text = await readTextIfExists(full);
+      const packageMatch = text.match(/^\s*package\s+([\w.]+)/m);
+      if (!packageMatch) continue;
+      const pkg = packageMatch[1];
+      packages.add(pkg);
+      const previewMatches = text.match(/@Preview\b/g);
+      if (previewMatches) {
+        previewCountByPackage.set(pkg, (previewCountByPackage.get(pkg) ?? 0) + previewMatches.length);
+      }
+    }
+  }
+
+  for (const srcRoot of ['java', 'kotlin']) {
+    await scanDir(join(moduleDir, 'src', 'main', srcRoot));
+  }
+
+  return { packages, previewCountByPackage };
+}
+
+/**
+ * Checks the `packages = listOf(...)` values configured for
+ * `generateComposePreviewRobolectricTests`, per module: flags a missing
+ * packages list, a leftover setup-instructions placeholder, and a configured
+ * package that doesn't actually exist in the module's sources — the three
+ * ways `packages = listOf("<your package>")` silently records zero previews.
+ */
+async function runPreviewPackagesCheck(projectDir: string, modules: string[], print: PrintFn): Promise<boolean> {
+  let allOk = true;
+
+  for (const module of modules) {
+    const moduleText = await gradleFileTexts(projectDir, [module]);
+    if (!moduleText.includes('generateComposePreviewRobolectricTests')) continue;
+
+    const packages = extractConfiguredPackages(moduleText);
+    if (!packages || packages.length === 0) {
+      allOk =
+        print('preview-packages', {
+          ok: false,
+          detail:
+            'generateComposePreviewRobolectricTests has no packages = listOf(...) — the scanner will find no previews',
+        }) && allOk;
+      continue;
+    }
+
+    const placeholder = packages.find(isPlaceholderPackage);
+    if (placeholder !== undefined) {
+      const detected = await detectAndroidPackage(projectDir, module);
+      allOk =
+        print('preview-packages', {
+          ok: false,
+          detail:
+            `packages = listOf("${placeholder}") is a placeholder from the setup instructions — replace it with ` +
+            `your app package (detected: ${detected ?? 'unknown'})`,
+        }) && allOk;
+      continue;
+    }
+
+    const scan = await scanModuleSources(projectDir, module);
+    const sourcePackages = [...scan.packages];
+    const missing = packages.find(
+      (pkg) => !sourcePackages.some((p) => p === pkg || p.startsWith(`${pkg}.`)),
+    );
+    if (missing !== undefined) {
+      const detected = await detectAndroidPackage(projectDir, module);
+      allOk =
+        print('preview-packages', {
+          ok: false,
+          detail: `package "${missing}" was not found in ${module} sources (detected: ${detected ?? 'unknown'})`,
+        }) && allOk;
+      continue;
+    }
+
+    let previewCount = 0;
+    for (const pkg of packages) {
+      for (const p of sourcePackages) {
+        if (p === pkg || p.startsWith(`${pkg}.`)) previewCount += scan.previewCountByPackage.get(p) ?? 0;
+      }
+    }
+
+    allOk =
+      print('preview-packages', {
+        ok: true,
+        detail:
+          `packages = listOf(${packages.map((p) => `"${p}"`).join(', ')})` +
+          (previewCount > 0 ? ` — ${previewCount} @Preview annotation(s) found` : ''),
+      }) && allOk;
   }
 
   return allOk;

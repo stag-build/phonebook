@@ -1,6 +1,6 @@
-import { access, readdir, writeFile } from 'node:fs/promises';
-import { basename, extname, resolve } from 'node:path';
-import type { PhonebookConfig } from '../config.js';
+import { access, readdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, extname, join, resolve } from 'node:path';
+import { loadConfig, type PhonebookConfig } from '../config.js';
 import { detectKotlinVersion, resolveMaxCompatible } from '../versions.js';
 import { accessorFor, loadVersionCatalog, pluginAccessorFor } from '../gradle/catalog.js';
 
@@ -19,6 +19,80 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function readTextOrUndefined(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reads a module's own build.gradle(.kts) files (not the root project's), concatenated. */
+async function readModuleGradleTexts(moduleDir: string): Promise<string> {
+  const texts: string[] = [];
+  for (const name of ['build.gradle.kts', 'build.gradle']) {
+    const text = await readTextOrUndefined(join(moduleDir, name));
+    if (text !== undefined) texts.push(text);
+  }
+  return texts.join('\n');
+}
+
+/**
+ * Walks down single-child directories from `base` until reaching the first
+ * level that contains .kt/.java files or branches into more than one
+ * subdirectory, returning the dotted path walked as a package name. Returns
+ * undefined if `base` doesn't exist or no package-like structure is found.
+ */
+async function detectPackageFromDirTree(base: string): Promise<string | undefined> {
+  const segments: string[] = [];
+  let current = base;
+  for (;;) {
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return undefined;
+    }
+    const dirs = entries.filter((e) => e.isDirectory());
+    const hasSources = entries.some((e) => e.isFile() && (e.name.endsWith('.kt') || e.name.endsWith('.java')));
+    if (hasSources || dirs.length !== 1) {
+      return segments.length > 0 ? segments.join('.') : undefined;
+    }
+    segments.push(dirs[0].name);
+    current = join(current, dirs[0].name);
+  }
+}
+
+/**
+ * Detects an Android module's application package, trying (in order):
+ * `namespace = "..."` in its build.gradle(.kts), `applicationId = "..."` in
+ * the same file, the `package="..."` attribute in its AndroidManifest.xml,
+ * and finally the directory structure under src/main/java or src/main/kotlin.
+ */
+export async function detectAndroidPackage(projectDir: string, module: string): Promise<string | undefined> {
+  const moduleDir = join(projectDir, ...module.split(':').filter(Boolean));
+  const gradleText = await readModuleGradleTexts(moduleDir);
+
+  const namespaceMatch = gradleText.match(/\bnamespace\s*=?\s*['"]([^'"]+)['"]/);
+  if (namespaceMatch) return namespaceMatch[1];
+
+  const applicationIdMatch = gradleText.match(/\bapplicationId\s*=?\s*['"]([^'"]+)['"]/);
+  if (applicationIdMatch) return applicationIdMatch[1];
+
+  const manifestText = await readTextOrUndefined(join(moduleDir, 'src', 'main', 'AndroidManifest.xml'));
+  if (manifestText) {
+    const packageMatch = manifestText.match(/\bpackage\s*=\s*"([^"]+)"/);
+    if (packageMatch) return packageMatch[1];
+  }
+
+  for (const srcRoot of ['java', 'kotlin']) {
+    const pkg = await detectPackageFromDirTree(join(moduleDir, 'src', 'main', srcRoot));
+    if (pkg) return pkg;
+  }
+
+  return undefined;
 }
 
 /** Detects the platform of a project directory from marker files. */
@@ -94,13 +168,20 @@ export async function runInit(dir: string): Promise<void> {
   }
 
   if (detected.platform === 'android') {
-    await printAndroidInstructions(projectDir);
+    let modules: string[] = [':app'];
+    try {
+      const loaded = await loadConfig(projectDir);
+      if (loaded.config.platform === 'android') modules = loaded.config.android?.modules ?? [':app'];
+    } catch {
+      // Config unreadable/invalid; fall back to the default module.
+    }
+    await printAndroidInstructions(projectDir, modules);
   } else {
     printIosInstructions();
   }
 }
 
-async function printAndroidInstructions(projectDir: string): Promise<void> {
+async function printAndroidInstructions(projectDir: string, modules: string[]): Promise<void> {
   const detected = await detectKotlinVersion(projectDir);
 
   let roborazziVersion = DEFAULT_ROBORAZZI_VERSION;
@@ -127,16 +208,23 @@ async function printAndroidInstructions(projectDir: string): Promise<void> {
       'run `phonebook doctor` after wiring things up.';
   }
 
-  console.log(`
-Next steps to wire up Roborazzi preview recording:
+  const moduleBlocks = await Promise.all(
+    modules.map(async (module) => {
+      const pkg = await detectAndroidPackage(projectDir, module);
+      return pkg
+        ? { module, packagesLine: `packages = listOf("${pkg}")`, warning: undefined as string | undefined }
+        : {
+            module,
+            packagesLine: 'packages = listOf("REPLACE_ME.your.app.package")',
+            warning: `could not detect the package for ${module} — replace REPLACE_ME... before running generate`,
+          };
+    }),
+  );
 
-1. In the root build.gradle.kts, add the Roborazzi plugin:
-
-     plugins {
-       id("io.github.takahirom.roborazzi") version "${roborazziVersion}" apply false
-     }
-
-2. In each recorded module's build.gradle.kts, apply the plugin and add:
+  const step2 = moduleBlocks
+    .map(
+      ({ module, packagesLine, warning }) => `
+2. In ${module}'s build.gradle.kts, apply the plugin and add:
 
      plugins {
        id("io.github.takahirom.roborazzi")
@@ -156,7 +244,7 @@ Next steps to wire up Roborazzi preview recording:
      roborazzi {
        generateComposePreviewRobolectricTests {
          enable = true
-         packages = listOf("<your package>")
+         ${packagesLine}
          includePrivatePreviews = true
        }
      }
@@ -171,7 +259,19 @@ Next steps to wire up Roborazzi preview recording:
          }
        }
      }
+${warning ? `\n   note: ${warning}\n` : ''}`,
+    )
+    .join('\n');
 
+  console.log(`
+Next steps to wire up Roborazzi preview recording:
+
+1. In the root build.gradle.kts, add the Roborazzi plugin:
+
+     plugins {
+       id("io.github.takahirom.roborazzi") version "${roborazziVersion}" apply false
+     }
+${step2}
 3. Run \`phonebook doctor\` to verify the setup.
 ${note ? `\n${note}\n` : ''}`);
 
