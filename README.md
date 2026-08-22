@@ -17,7 +17,7 @@ Commands run via `npx tsx src/cli.ts <cmd>` for now (npm packaging as `@stag/pho
 
 ## Quickstart: Android
 
-Add the Roborazzi Gradle plugin and preview-scanner test deps (see `samples/android/app/build.gradle.kts` for a full working example):
+Run `phonebook init` first — it detects your project's Kotlin version and prints these instructions with **library versions resolved to be compatible with it** (e.g. Kotlin 2.0 projects get Roborazzi 1.60.0; Kotlin 2.2+ gets the latest). The versions below are what a current-Kotlin project gets (see `samples/android/app/build.gradle.kts` for a full working example):
 
 ```kotlin
 // app/build.gradle.kts
@@ -38,6 +38,7 @@ dependencies {
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.72.0")
     testImplementation("io.github.sergio-sastre.ComposablePreviewScanner:android:0.9.3")
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose-preview-scanner-support:1.72.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4") // version from your Compose BOM, or pin one
 }
 ```
 
