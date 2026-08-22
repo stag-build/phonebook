@@ -41,12 +41,47 @@ function summarizeCoverage(report: CoverageReport): string {
   ].join('\n');
 }
 
+const HINT_LIST_CAP = 40;
+
+function summarizeHints(report: CoverageReport): string {
+  const allPreviews = [
+    ...report.components.flatMap((c) => c.previews),
+    ...report.orphanPreviews,
+  ];
+  const entries = allPreviews.flatMap((p) =>
+    (p.hints ?? []).map((h) => ({
+      file: p.file,
+      line: p.line,
+      functionName: p.name,
+      hint: h,
+    })),
+  );
+
+  if (entries.length === 0) {
+    return 'Configuration hints (0)';
+  }
+
+  const shown = entries.slice(0, HINT_LIST_CAP);
+  const lines = shown.map(
+    (e) =>
+      `${e.file}:${e.line} ${e.functionName} [${e.hint.rule}] ${e.hint.message} -> ${e.hint.suggestion}`,
+  );
+  const remaining = entries.length - shown.length;
+  if (remaining > 0) {
+    lines.push(`... and ${remaining} more (see JSON)`);
+  }
+
+  return [`Configuration hints (${entries.length})`, ...lines].join('\n');
+}
+
 const NAMING_GUIDANCE = `Naming convention (see docs/naming-convention.md):
 1. A display name containing "/" splits into component/state (e.g. "Button/Enabled").
 2. A display name without "/" becomes the state; the component comes from the function name.
 3. No display name: the function name (minus a leading/trailing "Preview") is the component, and the state is "Default".
 Component names are camel-case-spaced ("UserCard" -> "User Card", acronym runs kept together: "URLBar" -> "URL Bar").
-Dark mode: Android infers "Dark" state from uiMode = UI_MODE_NIGHT_YES and strips a trailing Dark/Night suffix from the function name; iOS has no such inference, so give the preview an explicit "Component/Dark" name and add .preferredColorScheme(.dark).`;
+Dark mode: Android infers "Dark" state from uiMode = UI_MODE_NIGHT_YES and strips a trailing Dark/Night suffix from the function name; iOS has no such inference, so give the preview an explicit "Component/Dark" name and add .preferredColorScheme(.dark).
+
+Configuration hints: analyze_coverage also flags previews whose name implies a configuration (landscape, dark, tablet, RTL, large font, ...) that the annotation doesn't actually declare — e.g. a function named "...Landscape" with a plain @Preview() renders portrait. Fix by adding the declared trait the hint suggests (device/orientation spec, uiMode, locale, fontScale, traits: for iOS, etc.), or renaming if the config was never intended.`;
 
 function androidTemplate(component: string, states: string[]): string {
   const name = component || 'Component';
@@ -133,7 +168,8 @@ export async function runMcpServer(): Promise<void> {
       }
 
       const summary = summarizeCoverage(report);
-      return textResult(`${summary}\n\n${JSON.stringify(report, null, 2)}`);
+      const hints = summarizeHints(report);
+      return textResult(`${summary}\n\n${hints}\n\n${JSON.stringify(report, null, 2)}`);
     },
   );
 

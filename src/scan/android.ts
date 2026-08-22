@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { CoverageReport, ScannedComponent, ScannedPreview } from './types.js';
+import { previewHints } from './hints.js';
 
 /**
  * Regex-based heuristic scanner for Jetpack Compose `@Composable` / `@Preview`
@@ -71,12 +72,22 @@ function scanKotlinFile(
       }
       if (/(Dark|Night)$/.test(fn.name)) dark = true;
 
+      const annotationText = previewMatches.map((m) => m[0]).join('\n');
+      const hints = previewHints({
+        platform: 'android',
+        functionName: fn.name,
+        displayName,
+        annotationText,
+      });
+
       filePreviews.push({
         name: fn.name,
         ...(displayName ? { displayName } : {}),
         file: relFile,
         line: fn.line,
         dark,
+        annotationText,
+        ...(hints.length > 0 ? { hints } : {}),
       });
     } else {
       fileComponents.push({
@@ -153,11 +164,14 @@ function computeStats(components: ScannedComponent[], orphanPreviews: ScannedPre
   const withDarkPreview = components.filter((c) => c.previews.some((p) => p.dark)).length;
   const totalPreviews =
     components.reduce((sum, c) => sum + c.previews.length, 0) + orphanPreviews.length;
+  const allPreviews = [...components.flatMap((c) => c.previews), ...orphanPreviews];
+  const hintCount = allPreviews.reduce((sum, p) => sum + (p.hints?.length ?? 0), 0);
   return {
     components: components.length,
     withPreview,
     withDarkPreview,
     totalPreviews,
+    hintCount,
   };
 }
 

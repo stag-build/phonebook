@@ -4,6 +4,10 @@
  * can find components with missing previews/states and add them as code.
  */
 
+import type { PreviewHint } from './hints.js';
+
+export type { PreviewHint };
+
 export interface ScannedPreview {
   /** Preview function name (Android) or #Preview display name / "unnamed" (iOS) */
   name: string;
@@ -13,6 +17,12 @@ export interface ScannedPreview {
   line: number;
   /** True when the preview declares a dark configuration (uiMode NIGHT / .dark) */
   dark: boolean;
+  /** Raw annotation/macro text as written in source (Android: @Preview(...) annotations
+   * joined; iOS: the #Preview(...) line plus the following lines of its body, capped). */
+  annotationText?: string;
+  /** Configuration hints: cases where the preview's name implies a trait its
+   * annotation doesn't declare. See src/scan/hints.ts. */
+  hints?: PreviewHint[];
 }
 
 export interface ScannedComponent {
@@ -35,5 +45,6 @@ export interface CoverageReport {
     withPreview: number;
     withDarkPreview: number;
     totalPreviews: number;
+    hintCount: number;
   };
 }

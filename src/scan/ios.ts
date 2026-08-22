@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { CoverageReport, ScannedComponent, ScannedPreview } from './types.js';
+import { previewHints } from './hints.js';
 
 /**
  * Regex-based heuristic scanner for SwiftUI `View` structs and `#Preview`
@@ -63,13 +64,23 @@ function findPreviews(content: string, relFile: string): ScannedPreview[] {
 
     const line = lineNumberAt(content, match.index);
     const dark = isDarkPreview(content, match.index, displayName);
+    const annotationText = extractAnnotationText(content, match.index);
+    const functionName = displayName ?? 'unnamed';
+    const hints = previewHints({
+      platform: 'ios',
+      functionName,
+      displayName,
+      annotationText,
+    });
 
     results.push({
-      name: displayName ?? 'unnamed',
+      name: functionName,
       ...(displayName !== undefined ? { displayName } : {}),
       file: relFile,
       line,
       dark,
+      annotationText,
+      ...(hints.length > 0 ? { hints } : {}),
     });
   }
 
@@ -99,6 +110,19 @@ function isDarkPreview(content: string, matchIndex: number, displayName: string 
   );
   const window = boundary === -1 ? restLines.slice(0, 11) : restLines.slice(0, Math.min(11, boundary));
   return /\.preferredColorScheme\(\s*\.dark\s*\)/.test(window.join('\n'));
+}
+
+/** The #Preview(...) line plus the following lines of its body, up to the next
+ * #Preview/PreviewProvider or ~15 lines, whichever comes first. */
+function extractAnnotationText(content: string, matchIndex: number): string {
+  const rest = content.slice(matchIndex);
+  const restLines = rest.split('\n');
+  const boundary = restLines.findIndex(
+    (l, i) => i > 0 && (/#Preview\b/.test(l) || /:\s*PreviewProvider\b/.test(l)),
+  );
+  const cap = 15;
+  const limit = boundary === -1 ? cap : Math.min(cap, boundary);
+  return restLines.slice(0, limit).join('\n');
 }
 
 function lineNumberAt(content: string, index: number): number {
@@ -164,11 +188,14 @@ function computeStats(components: ScannedComponent[], orphanPreviews: ScannedPre
   const withDarkPreview = components.filter((c) => c.previews.some((p) => p.dark)).length;
   const totalPreviews =
     components.reduce((sum, c) => sum + c.previews.length, 0) + orphanPreviews.length;
+  const allPreviews = [...components.flatMap((c) => c.previews), ...orphanPreviews];
+  const hintCount = allPreviews.reduce((sum, p) => sum + (p.hints?.length ?? 0), 0);
   return {
     components: components.length,
     withPreview,
     withDarkPreview,
     totalPreviews,
+    hintCount,
   };
 }
 

@@ -162,6 +162,30 @@ fun ShouldBeIgnored() {}
     const button = report.components.find((c) => c.name === 'PrimaryButton');
     expect(button?.file).toBe(join('app', 'src', 'main', 'java', 'dev', 'stag', 'PrimaryButton.kt'));
   });
+
+  it('captures the raw @Preview annotation text', async () => {
+    const report = await scanAndroid(projectDir, [':app']);
+    const button = report.components.find((c) => c.name === 'PrimaryButton');
+    const enabled = button?.previews.find((p) => p.name === 'PrimaryButtonEnabledPreview');
+    expect(enabled?.annotationText).toContain('@Preview(name = "Button/Enabled")');
+  });
+
+  it('attaches configuration hints to previews (unnamed-preview for a bare @Preview)', async () => {
+    const report = await scanAndroid(projectDir, [':app']);
+    const card = report.components.find((c) => c.name === 'UserCard');
+    const unnamed = card?.previews.find((p) => p.name === 'UserCardPreview');
+    expect(unnamed?.hints?.map((h) => h.rule)).toContain('unnamed-preview');
+
+    const named = card?.previews.find((p) => p.name === 'UserCardDarkPreview');
+    // Has no displayName either, so it also gets unnamed-preview, but not theme-dark
+    // since UI_MODE_NIGHT_YES is declared.
+    expect(named?.hints?.map((h) => h.rule)).not.toContain('theme-dark');
+  });
+
+  it('rolls up hintCount in stats', async () => {
+    const report = await scanAndroid(projectDir, [':app']);
+    expect(report.stats.hintCount).toBeGreaterThan(0);
+  });
 });
 
 describe('scanIos', () => {
@@ -312,5 +336,31 @@ struct IgnoredView: View {
     const report = await scanIos(projectDir);
     const card = report.components.find((c) => c.name === 'UserCard');
     expect(card?.file).toBe(join('Sample', 'Components', 'UserCard.swift'));
+  });
+
+  it('captures the raw #Preview annotation text', async () => {
+    const report = await scanIos(projectDir);
+    const card = report.components.find((c) => c.name === 'UserCard');
+    const dark = card?.previews.find((p) => p.displayName === 'UserCard/Dark');
+    expect(dark?.annotationText).toContain('#Preview("UserCard/Dark"');
+    expect(dark?.annotationText).toContain('.preferredColorScheme(.dark)');
+  });
+
+  it('attaches configuration hints to previews (sizing info when no traits: is declared)', async () => {
+    const report = await scanIos(projectDir);
+    const badge = report.components.find((c) => c.name === 'StatusBadge');
+    const unnamed = badge?.previews.find((p) => p.name === 'unnamed');
+    expect(unnamed?.hints?.map((h) => h.rule)).toContain('sizing');
+    expect(unnamed?.hints?.map((h) => h.rule)).toContain('unnamed-preview');
+
+    const card = report.components.find((c) => c.name === 'UserCard');
+    const named = card?.previews.find((p) => p.displayName === 'UserCard/Default');
+    // Has traits: .sizeThatFitsLayout declared, so no sizing hint.
+    expect(named?.hints?.map((h) => h.rule) ?? []).not.toContain('sizing');
+  });
+
+  it('rolls up hintCount in stats', async () => {
+    const report = await scanIos(projectDir);
+    expect(report.stats.hintCount).toBeGreaterThan(0);
   });
 });
