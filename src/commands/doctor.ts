@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { loadConfig, type PhonebookConfig } from '../config.js';
 import { diagnoseGradleFailure } from '../errors.js';
@@ -214,6 +214,21 @@ async function runAndroidChecks(
       'ComposablePreviewScanner / generateComposePreviewRobolectricTests not found; run `phonebook init` for setup instructions',
   }) && allOk;
 
+  const previewScannerConfigured = gradleText.includes('generateComposePreviewRobolectricTests');
+  if (previewScannerConfigured) {
+    const hasUiTestJunit4 = gradleText.includes('ui-test-junit4');
+    allOk = print('compose-test-deps', hasUiTestJunit4 ? {
+      ok: true,
+      detail: 'testImplementation("androidx.compose.ui:ui-test-junit4") found',
+    } : {
+      ok: false,
+      detail:
+        'missing testImplementation("androidx.compose.ui:ui-test-junit4") — the generated Roborazzi test ' +
+        'requires it (add testImplementation(platform("androidx.compose:compose-bom:<version>")) too if the ' +
+        'version comes from the BOM)',
+    }) && allOk;
+  }
+
   if (!gradleText.includes('includePrivatePreviews')) {
     print('private-previews', {
       ok: true,
@@ -283,6 +298,26 @@ async function runKotlinCompatCheck(projectDir: string, gradleText: string, prin
   });
 }
 
+/**
+ * Extracts compiler `e:` error lines from raw build output, dropping
+ * stack-frame continuation lines (indented, starting with "at ").
+ */
+export function extractCompilerErrors(output: string): string[] {
+  return output
+    .split('\n')
+    .filter((line) => line.trimStart().startsWith('e:') && !/^\s*at\s/.test(line));
+}
+
+/** Writes the full captured output of a `doctor --deep` compile to a log file, returning its path. */
+async function writeDeepCompileLog(projectDir: string, output: string): Promise<string> {
+  const logsDir = join(projectDir, 'phonebook-out', 'logs');
+  await mkdir(logsDir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const logPath = join(logsDir, `deep-compile-${timestamp}.log`);
+  await writeFile(logPath, output);
+  return logPath;
+}
+
 /** `doctor --deep`: actually compiles the unit test sources via Gradle. */
 async function runAndroidDeepCheck(
   config: PhonebookConfig,
@@ -295,12 +330,27 @@ async function runAndroidDeepCheck(
   const tasks = modules.map((m) => `${m}:compile${variantCap}UnitTestKotlin`);
 
   console.log('deep: compiling test sources (this may take a while)...');
+  let fullOutput = '';
   try {
-    await runGradle(projectDir, tasks, true);
-    return print('deep-compile', { ok: true, detail: `compiled: ${tasks.join(', ')}` });
-  } catch (err) {
-    // runGradle already appends diagnoseGradleFailure's lines to the message.
-    return print('deep-compile', { ok: false, detail: (err as Error).message });
+    await runGradle(projectDir, tasks, true, {
+      dumpTailOnFailure: false,
+      onOutput: (output) => {
+        fullOutput = output;
+      },
+    });
+    const logPath = await writeDeepCompileLog(projectDir, fullOutput);
+    return print('deep-compile', { ok: true, detail: `compiled: ${tasks.join(', ')} (full log: ${logPath})` });
+  } catch {
+    const logPath = await writeDeepCompileLog(projectDir, fullOutput);
+    const compilerErrors = extractCompilerErrors(fullOutput).slice(0, 3);
+    const diagnosis = diagnoseGradleFailure(fullOutput);
+    const detailLines = [
+      `Gradle failed compiling: ${tasks.join(', ')}`,
+      ...compilerErrors,
+      ...diagnosis,
+      `full log: ${logPath}`,
+    ];
+    return print('deep-compile', { ok: false, detail: detailLines.join('\n') });
   }
 }
 
@@ -429,17 +479,23 @@ async function runIosDeepCheck(
     `platform=iOS Simulator,name=${simulator}`,
   ];
   const result = await runCapture('xcodebuild', args, { cwd: projectDir });
-  if (result.code === 0) {
-    return print('deep-compile', { ok: true, detail: `build-for-testing succeeded for scheme "${ios.scheme}"` });
-  }
   const output = `${result.stdout}\n${result.stderr}`;
+  const logPath = await writeDeepCompileLog(projectDir, output);
+  if (result.code === 0) {
+    return print('deep-compile', {
+      ok: true,
+      detail: `build-for-testing succeeded for scheme "${ios.scheme}" (full log: ${logPath})`,
+    });
+  }
+  const compilerErrors = extractCompilerErrors(output).slice(0, 3);
   const diagnosis = diagnoseGradleFailure(output);
-  return print('deep-compile', {
-    ok: false,
-    detail: [`xcodebuild build-for-testing failed (exit ${result.code}) for scheme "${ios.scheme}"`, ...diagnosis].join(
-      '\n',
-    ),
-  });
+  const detailLines = [
+    `xcodebuild build-for-testing failed (exit ${result.code}) for scheme "${ios.scheme}"`,
+    ...compilerErrors,
+    ...diagnosis,
+    `full log: ${logPath}`,
+  ];
+  return print('deep-compile', { ok: false, detail: detailLines.join('\n') });
 }
 
 async function readTextIfExists(path: string): Promise<string> {

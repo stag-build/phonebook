@@ -19,11 +19,23 @@ export function diagnoseGradleFailure(output: string): string[] {
     );
   }
 
-  if (
+  const isJunit4Unresolved =
     /Unresolved reference '?junit4'?/.test(output) ||
-    /Cannot access class 'androidx\.compose\.ui\.test\.junit4/.test(output)
-  ) {
+    /Cannot access class 'androidx\.compose\.ui\.test\.junit4/.test(output);
+  if (isJunit4Unresolved) {
     lines.push('Missing test dependency: add testImplementation("androidx.compose.ui:ui-test-junit4") to the module.');
+  }
+
+  const mentionsRoborazziGeneratedTest =
+    /generated[\/\\]roborazzi/.test(output) || /RoborazziPreviewParameterizedTests/.test(output);
+  if (!isJunit4Unresolved && /FileAnalysisException|Internal compiler error/.test(output) && mentionsRoborazziGeneratedTest) {
+    const locationMatch = output.match(/While analysing (\S+?):(\d+):(\d+):/);
+    const location = locationMatch ? ` (at ${locationMatch[1]}:${locationMatch[2]}:${locationMatch[3]})` : '';
+    lines.push(
+      'Kotlin compiler crashed analyzing the generated Roborazzi test. This is usually a missing test ' +
+        'dependency — most often androidx.compose.ui:ui-test-junit4 — or a Roborazzi/ComposablePreviewScanner ' +
+        `version mismatch. Run \`phonebook doctor\` for dependency checks.${location}`,
+    );
   }
 
   const javaMatch = output.match(/Android Gradle plugin requires Java (\d+)/);

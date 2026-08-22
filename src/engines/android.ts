@@ -144,9 +144,18 @@ export function parseRoborazziFileName(file: string): RoborazziImageMeta {
  * translation. When `quiet` is true (used by the MCP server, whose stdout is
  * the JSON-RPC channel and must never carry build output), only the tail is
  * kept and nothing is echoed live; the tail is written to stderr once if the
- * build fails.
+ * build fails, unless `dumpTailOnFailure` is set to false.
+ *
+ * `onOutput`, when provided, is called once on exit (success or failure) with
+ * the full, untruncated captured output — useful for callers that want to
+ * write a complete log file rather than relying on the 200-line tail.
  */
-export function runGradle(projectDir: string, tasks: string[], quiet: boolean): Promise<void> {
+export function runGradle(
+  projectDir: string,
+  tasks: string[],
+  quiet: boolean,
+  options: { dumpTailOnFailure?: boolean; onOutput?: (output: string) => void } = {},
+): Promise<void> {
   return new Promise((res, rej) => {
     const gradlew = resolve(projectDir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
     const child = spawn(gradlew, [...tasks, '--stacktrace'], {
@@ -155,16 +164,20 @@ export function runGradle(projectDir: string, tasks: string[], quiet: boolean): 
     });
 
     let tail: string[] = [];
+    const full: string[] = [];
     const onData = (target: NodeJS.WritableStream) => (data: Buffer) => {
       if (!quiet) target.write(data);
-      tail.push(...data.toString('utf8').split('\n'));
+      const chunkLines = data.toString('utf8').split('\n');
+      tail.push(...chunkLines);
       if (tail.length > 200) tail = tail.slice(-200);
+      full.push(...chunkLines);
     };
     child.stdout?.on('data', onData(process.stdout));
     child.stderr?.on('data', onData(process.stderr));
 
     child.on('error', (err) => rej(new Error(`Failed to run ${gradlew}: ${err.message}`)));
     child.on('exit', (code) => {
+      options.onOutput?.(full.join('\n'));
       if (code === 0) {
         res();
         return;
@@ -174,7 +187,8 @@ export function runGradle(projectDir: string, tasks: string[], quiet: boolean): 
       if (diagnosis.length > 0) {
         process.stderr.write(diagnosis.map((line) => `phonebook: ${line}`).join('\n') + '\n');
       }
-      if (quiet && tail.length > 0) process.stderr.write(tailText + '\n');
+      const dumpTailOnFailure = options.dumpTailOnFailure ?? true;
+      if (quiet && dumpTailOnFailure && tail.length > 0) process.stderr.write(tailText + '\n');
       const message = [`Gradle failed (exit ${code}) running: ${tasks.join(' ')}`, ...diagnosis].join('\n');
       rej(new Error(message));
     });

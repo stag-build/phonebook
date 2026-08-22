@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseAvailableSimulatorNames, parseJavaMajorVersion, parseXcodeSchemes } from './doctor.js';
+import {
+  extractCompilerErrors,
+  parseAvailableSimulatorNames,
+  parseJavaMajorVersion,
+  parseXcodeSchemes,
+} from './doctor.js';
 
 describe('parseJavaMajorVersion', () => {
   it('parses modern version strings', () => {
@@ -71,5 +76,31 @@ describe('parseAvailableSimulatorNames', () => {
 
   it('returns an empty array for no devices', () => {
     expect(parseAvailableSimulatorNames('== Devices ==\n')).toEqual([]);
+  });
+});
+
+describe('extractCompilerErrors', () => {
+  it('extracts "e:" lines and drops indented stack-frame lines', () => {
+    const output = `
+e: org.jetbrains.kotlin.util.FileAnalysisException: While analysing /project/Foo.kt:30:49: java.lang.IllegalStateException: Shouldn't be here
+	at org.jetbrains.kotlin.foo.bar(Foo.kt:1)
+	at org.jetbrains.kotlin.foo.baz(Foo.kt:2)
+Caused by: java.lang.IllegalStateException: Shouldn't be here
+	at org.jetbrains.kotlin.foo.qux(Foo.kt:3)
+
+> Internal compiler error. See log for more details
+`;
+    expect(extractCompilerErrors(output)).toEqual([
+      "e: org.jetbrains.kotlin.util.FileAnalysisException: While analysing /project/Foo.kt:30:49: java.lang.IllegalStateException: Shouldn't be here",
+    ]);
+  });
+
+  it('returns multiple "e:" lines when present', () => {
+    const output = "e: first error\nsome other line\ne: second error\n\tat some.Frame(File.kt:1)";
+    expect(extractCompilerErrors(output)).toEqual(['e: first error', 'e: second error']);
+  });
+
+  it('returns an empty array when there are no "e:" lines', () => {
+    expect(extractCompilerErrors('BUILD SUCCESSFUL\n0 tests completed')).toEqual([]);
   });
 });

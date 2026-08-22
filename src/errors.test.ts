@@ -92,4 +92,44 @@ Android Gradle plugin requires Java 17 to run.
   it('returns an empty array for unrecognized output', () => {
     expect(diagnoseGradleFailure('some totally unrelated failure')).toEqual([]);
   });
+
+  it('flags a K2 compiler crash analyzing the generated Roborazzi test, with file:line:col', () => {
+    const output = `
+e: org.jetbrains.kotlin.util.FileAnalysisException: While analysing /Users/dev/app/build/generated/roborazzi/preview-screenshot/debug/com/github/takahirom/roborazzi/RoborazziPreviewParameterizedTests.kt:30:49: java.lang.IllegalStateException: Shouldn't be here
+	at org.jetbrains.kotlin.foo.bar(Foo.kt:1)
+	at org.jetbrains.kotlin.foo.baz(Foo.kt:2)
+Caused by: java.lang.IllegalStateException: Shouldn't be here
+	at org.jetbrains.kotlin.foo.qux(Foo.kt:3)
+
+> Internal compiler error. See log for more details
+`;
+    const lines = diagnoseGradleFailure(output);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('Kotlin compiler crashed analyzing the generated Roborazzi test');
+    expect(lines[0]).toContain('androidx.compose.ui:ui-test-junit4');
+    expect(lines[0]).toContain('phonebook doctor');
+    expect(lines[0]).toContain(
+      '(at /Users/dev/app/build/generated/roborazzi/preview-screenshot/debug/com/github/takahirom/roborazzi/RoborazziPreviewParameterizedTests.kt:30:49)',
+    );
+  });
+
+  it('does not flag the compiler-crash signature without a generated Roborazzi path', () => {
+    const output = `
+e: org.jetbrains.kotlin.util.FileAnalysisException: While analysing /Users/dev/app/src/main/java/dev/stag/sample/Foo.kt:1:1: something
+> Internal compiler error. See log for more details
+`;
+    expect(diagnoseGradleFailure(output)).toEqual([]);
+  });
+
+  it('prefers the specific junit4-unresolved-reference signature over the compiler-crash signature when both match', () => {
+    const output = `
+e: file:///project/app/build/generated/roborazzi/preview-screenshot/debug/RoborazziPreviewParameterizedTests.kt: (30, 49): Unresolved reference 'junit4'
+e: org.jetbrains.kotlin.util.FileAnalysisException: While analysing /project/app/build/generated/roborazzi/preview-screenshot/debug/RoborazziPreviewParameterizedTests.kt:30:49: java.lang.IllegalStateException: Shouldn't be here
+> Internal compiler error. See log for more details
+`;
+    const lines = diagnoseGradleFailure(output);
+    expect(lines).toEqual([
+      'Missing test dependency: add testImplementation("androidx.compose.ui:ui-test-junit4") to the module.',
+    ]);
+  });
 });
