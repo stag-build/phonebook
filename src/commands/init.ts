@@ -2,6 +2,7 @@ import { access, readdir, writeFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
 import { detectKotlinVersion, resolveMaxCompatible } from '../versions.js';
+import { accessorFor, loadVersionCatalog, pluginAccessorFor } from '../gradle/catalog.js';
 
 const ROBORAZZI_GROUP = 'io.github.takahirom.roborazzi';
 const ROBORAZZI_ARTIFACT = 'roborazzi';
@@ -173,6 +174,60 @@ Next steps to wire up Roborazzi preview recording:
 
 3. Run \`phonebook doctor\` to verify the setup.
 ${note ? `\n${note}\n` : ''}`);
+
+  const catalogs = await loadVersionCatalog(projectDir);
+  if (catalogs.size > 0) {
+    const prefix = catalogs.has('libs') ? 'libs' : [...catalogs.keys()][0];
+    console.log(catalogInstructions(prefix, roborazziVersion, cpsVersion));
+  }
+}
+
+/** Builds the version-catalog variant of the setup instructions, for projects that already use one. */
+function catalogInstructions(prefix: string, roborazziVersion: string, cpsVersion: string): string {
+  const roborazziAlias = 'roborazzi';
+  const roborazziComposeAlias = 'roborazzi-compose';
+  const roborazziScannerAlias = 'roborazzi-compose-preview-scanner-support';
+  const cpsAlias = 'composable-preview-scanner';
+  const robolectricAlias = 'robolectric';
+  const uiTestJunit4Alias = 'androidx-compose-ui-test-junit4';
+  const pluginAlias = 'roborazzi';
+
+  return `
+This project uses a Gradle version catalog ("${prefix}"). Equivalent additions using catalog accessors:
+
+1. In gradle/${prefix === 'libs' ? 'libs' : prefix}.versions.toml:
+
+     [versions]
+     roborazzi = "${roborazziVersion}"
+     composablePreviewScanner = "${cpsVersion}"
+
+     [libraries]
+     ${roborazziAlias} = { module = "io.github.takahirom.roborazzi:roborazzi", version.ref = "roborazzi" }
+     ${roborazziComposeAlias} = { module = "io.github.takahirom.roborazzi:roborazzi-compose", version.ref = "roborazzi" }
+     ${roborazziScannerAlias} = { module = "io.github.takahirom.roborazzi:roborazzi-compose-preview-scanner-support", version.ref = "roborazzi" }
+     ${cpsAlias} = { module = "io.github.sergio-sastre.ComposablePreviewScanner:android", version.ref = "composablePreviewScanner" }
+     ${robolectricAlias} = { module = "org.robolectric:robolectric", version = "4.14.1" }
+     ${uiTestJunit4Alias} = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+
+     [plugins]
+     ${pluginAlias} = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
+
+2. In each recorded module's build.gradle.kts, apply the plugin and add:
+
+     plugins {
+       alias(${pluginAccessorFor(pluginAlias, prefix)})
+     }
+
+     dependencies {
+       testImplementation(${accessorFor(roborazziAlias, prefix)})
+       testImplementation(${accessorFor(roborazziComposeAlias, prefix)})
+       testImplementation(${accessorFor(roborazziScannerAlias, prefix)})
+       testImplementation(${accessorFor(cpsAlias, prefix)})
+       testImplementation(${accessorFor(robolectricAlias, prefix)})
+       // version from your Compose BOM, or pin one in the catalog
+       testImplementation(${accessorFor(uiTestJunit4Alias, prefix)})
+     }
+`;
 }
 
 function printIosInstructions(): void {

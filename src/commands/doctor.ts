@@ -11,6 +11,13 @@ import {
   lookupFallbackMetadata,
   resolveMaxCompatible,
 } from '../versions.js';
+import {
+  findLibrary,
+  findPlugin,
+  loadVersionCatalog,
+  UNIT_TEST_CONFIGURATIONS,
+  type VersionCatalog,
+} from '../gradle/catalog.js';
 
 interface CheckResult {
   ok: boolean;
@@ -158,6 +165,27 @@ const ROBORAZZI_PLUGIN_PATTERN =
   /(?:id\(\s*["']io\.github\.takahirom\.roborazzi["']\s*\)|id\s+["']io\.github\.takahirom\.roborazzi["'])\s+version\s+["']([0-9]+\.[0-9]+\.[0-9]+)["']/;
 const ROBORAZZI_GROUP = 'io.github.takahirom.roborazzi';
 const ROBORAZZI_ARTIFACT = 'roborazzi';
+const CPS_GROUP = 'io.github.sergio-sastre.ComposablePreviewScanner';
+const CPS_ARTIFACT = 'android';
+
+/**
+ * Message used when a dependency/plugin check can't find its coordinate in
+ * the module build files but the project has a build-logic/buildSrc
+ * convention-plugin setup — in that case a FAIL would likely be a false
+ * negative (the dependency may be applied by a convention plugin we can't
+ * see), so the check degrades to a note pointing at `doctor --deep` instead.
+ */
+function indirectionNote(coordinate: string): string {
+  return (
+    `could not find ${coordinate} in the module build files; this repo has build-logic/buildSrc, ` +
+    'so it may be applied by a convention plugin — run `phonebook doctor --deep` to verify by compiling'
+  );
+}
+
+/** Message for a dependency found, but declared under a configuration that never reaches the unit-test compile classpath. */
+function wrongConfigurationDetail(group: string, name: string, foundConfiguration: string): string {
+  return `${group}:${name} is declared as ${foundConfiguration}, which is not on the unit-test compile classpath — add it as testImplementation`;
+}
 
 async function runAndroidChecks(
   config: PhonebookConfig,
@@ -193,40 +221,75 @@ async function runAndroidChecks(
 
   const modules = config.android?.modules ?? [':app'];
   const gradleText = await gradleFileTexts(projectDir, modules);
+  const catalogs = await loadVersionCatalog(projectDir);
+  const catalogList = [...catalogs.values()];
+  const hasIndirection = (await exists(join(projectDir, 'build-logic'))) || (await exists(join(projectDir, 'buildSrc')));
 
-  const hasRoborazziPlugin = gradleText.includes('io.github.takahirom.roborazzi');
-  allOk = print('roborazzi-plugin', hasRoborazziPlugin ? {
-    ok: true,
-    detail: 'io.github.takahirom.roborazzi plugin found',
-  } : {
-    ok: false,
-    detail: 'io.github.takahirom.roborazzi plugin not found in build.gradle(.kts); run `phonebook init` for setup instructions',
-  }) && allOk;
-
-  const hasPreviewScanner =
-    gradleText.includes('ComposablePreviewScanner') && gradleText.includes('generateComposePreviewRobolectricTests');
-  allOk = print('preview-scanner', hasPreviewScanner ? {
-    ok: true,
-    detail: 'ComposablePreviewScanner + generateComposePreviewRobolectricTests configured',
-  } : {
-    ok: false,
-    detail:
-      'ComposablePreviewScanner / generateComposePreviewRobolectricTests not found; run `phonebook init` for setup instructions',
-  }) && allOk;
-
-  const previewScannerConfigured = gradleText.includes('generateComposePreviewRobolectricTests');
-  if (previewScannerConfigured) {
-    const hasUiTestJunit4 = gradleText.includes('ui-test-junit4');
-    allOk = print('compose-test-deps', hasUiTestJunit4 ? {
+  const roborazziPlugin = findPlugin(gradleText, catalogList, ROBORAZZI_GROUP);
+  if (roborazziPlugin.found) {
+    allOk = print('roborazzi-plugin', {
       ok: true,
-      detail: 'testImplementation("androidx.compose.ui:ui-test-junit4") found',
-    } : {
+      detail: `io.github.takahirom.roborazzi plugin found${roborazziPlugin.via === 'catalog' ? ' (via version catalog)' : ''}`,
+    }) && allOk;
+  } else if (hasIndirection) {
+    print('roborazzi-plugin', { ok: true, detail: '', note: indirectionNote(ROBORAZZI_GROUP) });
+  } else {
+    allOk = print('roborazzi-plugin', {
+      ok: false,
+      detail: 'io.github.takahirom.roborazzi plugin not found in build.gradle(.kts); run `phonebook init` for setup instructions',
+    }) && allOk;
+  }
+
+  const cpsLib = findLibrary(gradleText, catalogList, CPS_GROUP, CPS_ARTIFACT, {
+    configurations: UNIT_TEST_CONFIGURATIONS,
+  });
+  const hasGenerateBlock = gradleText.includes('generateComposePreviewRobolectricTests');
+  const hasPreviewScanner = cpsLib.found && hasGenerateBlock;
+  if (hasPreviewScanner) {
+    allOk = print('preview-scanner', {
+      ok: true,
+      detail: `ComposablePreviewScanner + generateComposePreviewRobolectricTests configured${cpsLib.via === 'catalog' ? ' (via version catalog)' : ''}`,
+    }) && allOk;
+  } else if (cpsLib.via === 'wrong-configuration' && cpsLib.foundConfiguration) {
+    allOk = print('preview-scanner', {
+      ok: false,
+      detail: wrongConfigurationDetail(CPS_GROUP, CPS_ARTIFACT, cpsLib.foundConfiguration),
+    }) && allOk;
+  } else if (hasIndirection) {
+    print('preview-scanner', { ok: true, detail: '', note: indirectionNote(`${CPS_GROUP}:${CPS_ARTIFACT}`) });
+  } else {
+    allOk = print('preview-scanner', {
       ok: false,
       detail:
-        'missing testImplementation("androidx.compose.ui:ui-test-junit4") — the generated Roborazzi test ' +
-        'requires it (add testImplementation(platform("androidx.compose:compose-bom:<version>")) too if the ' +
-        'version comes from the BOM)',
+        'ComposablePreviewScanner / generateComposePreviewRobolectricTests not found; run `phonebook init` for setup instructions',
     }) && allOk;
+  }
+
+  if (hasGenerateBlock) {
+    const uiTestJunit4 = findLibrary(gradleText, catalogList, 'androidx.compose.ui', 'ui-test-junit4', {
+      configurations: UNIT_TEST_CONFIGURATIONS,
+    });
+    if (uiTestJunit4.found) {
+      allOk = print('compose-test-deps', {
+        ok: true,
+        detail: `testImplementation("androidx.compose.ui:ui-test-junit4") found${uiTestJunit4.via === 'catalog' ? ' (via version catalog)' : ''}`,
+      }) && allOk;
+    } else if (uiTestJunit4.via === 'wrong-configuration' && uiTestJunit4.foundConfiguration) {
+      allOk = print('compose-test-deps', {
+        ok: false,
+        detail: wrongConfigurationDetail('androidx.compose.ui', 'ui-test-junit4', uiTestJunit4.foundConfiguration),
+      }) && allOk;
+    } else if (hasIndirection) {
+      print('compose-test-deps', { ok: true, detail: '', note: indirectionNote('androidx.compose.ui:ui-test-junit4') });
+    } else {
+      allOk = print('compose-test-deps', {
+        ok: false,
+        detail:
+          'missing testImplementation("androidx.compose.ui:ui-test-junit4") — the generated Roborazzi test ' +
+          'requires it (add testImplementation(platform("androidx.compose:compose-bom:<version>")) too if the ' +
+          'version comes from the BOM)',
+      }) && allOk;
+    }
   }
 
   if (!gradleText.includes('includePrivatePreviews')) {
@@ -237,7 +300,7 @@ async function runAndroidChecks(
     });
   }
 
-  allOk = (await runKotlinCompatCheck(projectDir, gradleText, print)) && allOk;
+  allOk = (await runKotlinCompatCheck(projectDir, gradleText, catalogList, print)) && allOk;
 
   if (deep) {
     allOk = (await runAndroidDeepCheck(config, projectDir, modules, print)) && allOk;
@@ -252,16 +315,57 @@ async function runAndroidChecks(
  * its Kotlin requirement, so this uses FALLBACK / fetchKotlinMetadataVersion
  * instead of trusting the POM.
  */
-async function runKotlinCompatCheck(projectDir: string, gradleText: string, print: PrintFn): Promise<boolean> {
+async function runKotlinCompatCheck(
+  projectDir: string,
+  gradleText: string,
+  catalogList: VersionCatalog[],
+  print: PrintFn,
+): Promise<boolean> {
   const detected = await detectKotlinVersion(projectDir);
-  const declaredVersion =
+  let declaredVersion =
     gradleText.match(ROBORAZZI_DEP_PATTERN)?.[1] ?? gradleText.match(ROBORAZZI_PLUGIN_PATTERN)?.[1];
 
-  if (!detected || !declaredVersion) {
+  if (!declaredVersion) {
+    // Catalog library version: io.github.takahirom.roborazzi:roborazzi or any roborazzi-* artifact
+    // (roborazzi-compose, roborazzi-compose-preview-scanner-support, ...), actually referenced from
+    // a unit-test-reaching configuration.
+    outer: for (const cat of catalogList) {
+      for (const lib of cat.libraries) {
+        if (lib.group !== ROBORAZZI_GROUP || !lib.version) continue;
+        if (lib.name !== ROBORAZZI_ARTIFACT && !lib.name.startsWith('roborazzi')) continue;
+        const result = findLibrary(gradleText, cat, lib.group, lib.name, { configurations: UNIT_TEST_CONFIGURATIONS });
+        if (result.found) {
+          declaredVersion = lib.version;
+          break outer;
+        }
+      }
+    }
+  }
+
+  if (!declaredVersion) {
+    // Catalog plugin version for the roborazzi plugin id.
+    const pluginResult = findPlugin(gradleText, catalogList, ROBORAZZI_GROUP);
+    if (pluginResult.found && pluginResult.via === 'catalog' && pluginResult.version) {
+      declaredVersion = pluginResult.version;
+    }
+  }
+
+  if (!declaredVersion) {
     print('kotlin-compat', {
       ok: true,
       detail: '',
-      note: 'could not detect both the project Kotlin version and the declared Roborazzi version; skipping compatibility check',
+      note:
+        'could not determine the declared Roborazzi version from a literal coordinate, the version catalog ' +
+        'library, or the version catalog plugin; skipping compatibility check',
+    });
+    return true;
+  }
+
+  if (!detected) {
+    print('kotlin-compat', {
+      ok: true,
+      detail: '',
+      note: 'could not detect the project Kotlin version; skipping compatibility check',
     });
     return true;
   }
