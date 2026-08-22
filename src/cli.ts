@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { loadConfig } from './config.js';
 import { runDoctor } from './commands/doctor.js';
 import { runInit } from './commands/init.js';
@@ -36,11 +37,32 @@ program
 program
   .command('build')
   .description('Build the static gallery site from a bundle')
-  .argument('<bundle>', 'bundle directory produced by `phonebook generate`')
-  .option('-o, --output <dir>', 'site output directory', 'phonebook-site')
-  .action(async (bundle: string, opts: { output: string }) => {
-    const outDir = resolve(opts.output);
-    const count = await buildSite(resolve(bundle), outDir);
+  .argument(
+    '[bundle]',
+    'bundle directory produced by `phonebook generate` (default: the output dir from phonebook.config.json)',
+  )
+  .option('-C, --dir <dir>', 'project directory containing phonebook.config.json', '.')
+  .option('-o, --output <dir>', 'site output directory (default: <project>/phonebook-site)')
+  .action(async (bundle: string | undefined, opts: { dir: string; output?: string }) => {
+    // Running `phonebook build` with no argument in a project directory is the
+    // common case right after `generate`: fall back to that project's bundle.
+    let bundleDir: string;
+    let siteDefaultBase = process.cwd();
+    if (bundle) {
+      bundleDir = resolve(bundle);
+    } else {
+      const { config, projectDir } = await loadConfig(opts.dir);
+      bundleDir = resolve(projectDir, config.output ?? 'phonebook-out');
+      siteDefaultBase = projectDir;
+      if (!existsSync(join(bundleDir, 'manifest.json'))) {
+        throw new Error(
+          `No bundle found at ${bundleDir}. Run \`phonebook generate\` first, ` +
+            'or pass a bundle directory explicitly.',
+        );
+      }
+    }
+    const outDir = opts.output ? resolve(opts.output) : join(siteDefaultBase, 'phonebook-site');
+    const count = await buildSite(bundleDir, outDir);
     console.log(`Built gallery with ${count} screenshots -> ${outDir}/index.html`);
   });
 

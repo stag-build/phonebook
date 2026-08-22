@@ -11,7 +11,7 @@ Each repo runs Phonebook independently. v1 is single-platform: one Android repo 
 1. `phonebook generate` runs your platform's preview-rendering engine and harvests the output into a **bundle** (`manifest.json` + `images/`).
    - Android: [Roborazzi](https://github.com/takahirom/roborazzi) + [ComposablePreviewScanner](https://github.com/sergio-sastre/ComposablePreviewScanner), run on the JVM via Robolectric. No emulator, works on Linux CI.
    - iOS: [SnapshotPreviews](https://github.com/getsentry/SnapshotPreviews), run via `xcodebuild test` on a simulator. Requires macOS.
-2. `phonebook build <bundle>` turns that bundle into a static site (`phonebook-site/index.html` by default) — plain HTML/CSS/JS, works from `file://` or any static host.
+2. `phonebook build` turns that bundle into a static site (`phonebook-site/index.html` by default) — plain HTML/CSS/JS, works from `file://` or any static host.
 
 Commands run via `npx tsx src/cli.ts <cmd>` for now (npm packaging as `@stag/phonebook` is pending — this repo is not yet on npm).
 
@@ -56,7 +56,7 @@ Then, from the repo containing Phonebook:
 
 ```sh
 npx tsx src/cli.ts generate -C /path/to/your/android/repo
-npx tsx src/cli.ts build /path/to/your/android/repo/phonebook-out
+npx tsx src/cli.ts build -C /path/to/your/android/repo
 ```
 
 Open `phonebook-site/index.html`.
@@ -94,7 +94,7 @@ Your scheme must build and test the snapshot test target (see `PhonebookSample.x
 
 ```sh
 npx tsx src/cli.ts generate -C /path/to/your/ios/repo
-npx tsx src/cli.ts build /path/to/your/ios/repo/phonebook-out
+npx tsx src/cli.ts build -C /path/to/your/ios/repo
 ```
 
 ## Naming convention
@@ -115,11 +115,15 @@ Phonebook groups screenshots into `component / state` cards from your existing p
 | `ios.scheme` | string | — | Required. Scheme that includes the SnapshotPreviews test target. |
 | `ios.simulator` | string | `"iPhone 17 Pro"` | Simulator device name used for `-destination`. |
 
-`phonebook generate` also accepts `-C <dir>` (project directory containing `phonebook.config.json`) and `-o <dir>` (bundle output override). `phonebook build <bundle>` accepts `-o <dir>` for the site output directory (default `phonebook-site`).
+Both `generate` and `build` accept `-C <dir>` (project directory containing `phonebook.config.json`). `generate` takes `-o <dir>` to override the bundle output and `--allow-empty` to tolerate a run that records no previews. `build` takes an optional bundle path — with none, it uses the project's bundle directory — and `-o <dir>` for the site output (default `<project>/phonebook-site`).
 
 ## `phonebook init` and `phonebook doctor`
 
-`phonebook init` will detect your platform and scaffold `phonebook.config.json` plus the dependency/setup snippets shown above — it never edits your build files for you. `phonebook doctor` will check that the required plugin, test target, and toolchain (JDK/Xcode/simulator) are wired up correctly before you run `generate`. Both are being added in parallel with this doc and aren't in the CLI yet (only `generate` and `build` are implemented today).
+`phonebook init` detects your platform and scaffolds `phonebook.config.json` plus the dependency/setup snippets — with library versions resolved against your project's Kotlin version and your app package filled in. It never edits your build files for you.
+
+`phonebook doctor` checks that everything `generate` needs is wired up: plugin and test dependencies (resolved through Gradle version catalogs when you use them), the scanner's `packages` value, Kotlin/Roborazzi compatibility, and the toolchain (JDK/Xcode/simulator). Add `--deep` to also compile the test sources — slower, but authoritative when a static check and reality disagree.
+
+`phonebook mcp` runs an MCP server exposing coverage analysis, setup checks, preview guidance, and the generate/build commands to a coding agent.
 
 ## Requirements
 
