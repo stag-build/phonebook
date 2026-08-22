@@ -85,6 +85,7 @@ export async function generateAndroid(
         previewName: meta.fqn,
         image: `images/${imageName}`,
         ...(meta.theme ? { theme: meta.theme } : {}),
+        ...(meta.tags && meta.tags.length > 0 ? { tags: meta.tags } : {}),
       });
     }
   }
@@ -118,7 +119,16 @@ interface RoborazziImageMeta {
   theme?: 'light' | 'dark';
   /** Derived from the package + file-class segments, e.g. "dev/stag/sample/PrimaryButton.kt" */
   sourceFile?: string;
+  /**
+   * Machine-generated markers Roborazzi appends for @Preview attributes
+   * (e.g. "WITH_BACKGROUND" for showBackground = true) that are not a
+   * user-chosen display name. See parseRoborazziFileName for classification.
+   */
+  tags?: string[];
 }
+
+/** Roborazzi's machine-generated ALL-CAPS markers, e.g. WITH_BACKGROUND, UI_MODE_NIGHT_YES, PIXEL_4_XL. */
+const MACHINE_MARKER = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$/;
 
 /**
  * Roborazzi + ComposablePreviewScanner names recorded images
@@ -128,6 +138,14 @@ interface RoborazziImageMeta {
  *   dev.stag.sample.PrimaryButtonKt.PrimaryButtonEnabledPreview.Button/Enabled.png
  *   dev.stag.sample.UserCardKt.UserCardPreview.png
  *   dev.stag.sample.UserCardKt.UserCardDarkPreview.NIGHT.png   (uiMode night)
+ *
+ * Roborazzi also appends machine-generated ALL-CAPS markers derived from
+ * `@Preview` attributes (verified against a real app whose previews are all
+ * `@Preview(showBackground = true)`, with no explicit name):
+ *   com.om.spotifyuiapp...HomeContentKt.HomeContent.WITH_BACKGROUND.png
+ * These are not a user-chosen display name and must not become the state;
+ * they are collected into `tags` instead. NIGHT/NOTNIGHT (uiMode) become
+ * `theme` rather than a tag, as before.
  *
  * `file` is the png path relative to the roborazzi output dir ("/"-separated).
  */
@@ -148,16 +166,36 @@ export function parseRoborazziFileName(file: string): RoborazziImageMeta {
     fileClass?.endsWith('Kt') && fnIndex >= 1
       ? [...dotParts.slice(0, fnIndex - 1), `${fileClass.slice(0, -2)}.kt`].join('/')
       : undefined;
-  const nameParts = [...dotParts.slice(fnIndex + 1), ...restPath];
-  let displayName: string | undefined = nameParts.length > 0 ? nameParts.join('/') : undefined;
+
+  // Each remaining "level" (the head's trailing dot segments, then one level
+  // per "/" path segment) may itself carry multiple dot-separated tokens: a
+  // real display-name token plus Roborazzi's machine-generated markers.
+  const levels = [dotParts.slice(fnIndex + 1), ...restPath.map((p) => p.split('.'))];
 
   let theme: 'light' | 'dark' | undefined;
-  if (displayName === 'NIGHT') {
-    theme = 'dark';
-    displayName = undefined;
+  const tags: string[] = [];
+  const nameLevels: string[] = [];
+  for (const level of levels) {
+    const nameTokens: string[] = [];
+    for (const token of level) {
+      if (token === 'NIGHT') theme = 'dark';
+      else if (token === 'NOTNIGHT') theme = 'light';
+      else if (MACHINE_MARKER.test(token)) tags.push(token);
+      else nameTokens.push(token);
+    }
+    if (nameTokens.length > 0) nameLevels.push(nameTokens.join('.'));
   }
 
-  return { fqn, functionName, displayName, theme, sourceFile };
+  const displayName = nameLevels.length > 0 ? nameLevels.join('/') : undefined;
+
+  return {
+    fqn,
+    functionName,
+    displayName,
+    theme,
+    sourceFile,
+    ...(tags.length > 0 ? { tags } : {}),
+  };
 }
 
 /**

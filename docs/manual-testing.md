@@ -18,7 +18,7 @@ Good candidates: any Compose app using `@Preview`. [Now in Android](https://gith
 4. Add the Gradle wiring from the init output to each listed module (plugin + test deps + `roborazzi { generateComposePreviewRobolectricTests { ... packages = listOf("<module's package>") } }`). Set `includePrivatePreviews = true` — most real repos declare previews `private`.
 5. `phonebook doctor -C /path/to/repo` — fix anything it flags. Expect the JDK check to catch you if your default `java` is < 17 (set `JAVA_HOME`).
 6. `phonebook generate -C /path/to/repo` — first run downloads Robolectric artifacts; expect minutes.
-7. `phonebook build -C /path/to/repo && open /path/to/repo/phonebook-site/index.html`
+7. `phonebook build -C /path/to/repo && open /path/to/repo/phonebook-out/index.html` — `build` with no `-o` writes the site straight into the bundle directory (`phonebook-out/` by default), reusing its `images/` in place rather than duplicating them.
 
 What to judge:
 - **Grouping quality** — this is the make-or-break risk (see PLAN.md). Do preview names like `ButtonPreview`, `NiaButtonPreview`, `@Preview(name="...")` land as sensible component/state groups, or as one component per preview? Note the ugly cases; they feed the naming-convention overrides.

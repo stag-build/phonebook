@@ -11,7 +11,7 @@ Each repo runs Phonebook independently. v1 is single-platform: one Android repo 
 1. `phonebook generate` runs your platform's preview-rendering engine and harvests the output into a **bundle** (`manifest.json` + `images/`).
    - Android: [Roborazzi](https://github.com/takahirom/roborazzi) + [ComposablePreviewScanner](https://github.com/sergio-sastre/ComposablePreviewScanner), run on the JVM via Robolectric. No emulator, works on Linux CI.
    - iOS: [SnapshotPreviews](https://github.com/getsentry/SnapshotPreviews), run via `xcodebuild test` on a simulator. Requires macOS.
-2. `phonebook build` turns that bundle into a static site (`phonebook-site/index.html` by default) — plain HTML/CSS/JS, works from `file://` or any static host.
+2. `phonebook build` turns that bundle into a static site — by default it writes `index.html` directly into the bundle directory (reusing the images already there, no copying), so the site lands at `<bundle>/index.html`. Pass `-o <dir>` to instead copy everything into a standalone site directory (for publishing elsewhere, or later merging multiple bundles). Plain HTML/CSS/JS, works from `file://` or any static host.
 
 Commands run via `npx tsx src/cli.ts <cmd>` for now (npm packaging as `@stag/phonebook` is pending — this repo is not yet on npm).
 
@@ -59,7 +59,7 @@ npx tsx src/cli.ts generate -C /path/to/your/android/repo
 npx tsx src/cli.ts build -C /path/to/your/android/repo
 ```
 
-Open `phonebook-site/index.html`.
+Open `phonebook-out/index.html`.
 
 ## Quickstart: iOS
 
@@ -97,6 +97,8 @@ npx tsx src/cli.ts generate -C /path/to/your/ios/repo
 npx tsx src/cli.ts build -C /path/to/your/ios/repo
 ```
 
+Open `phonebook-out/index.html`.
+
 ## Naming convention
 
 Phonebook groups screenshots into `component / state` cards from your existing preview names — no required annotation. See [docs/naming-convention.md](docs/naming-convention.md) for the full rules and examples.
@@ -115,7 +117,7 @@ Phonebook groups screenshots into `component / state` cards from your existing p
 | `ios.scheme` | string | — | Required. Scheme that includes the SnapshotPreviews test target. |
 | `ios.simulator` | string | `"iPhone 17 Pro"` | Simulator device name used for `-destination`. |
 
-Both `generate` and `build` accept `-C <dir>` (project directory containing `phonebook.config.json`). `generate` takes `-o <dir>` to override the bundle output and `--allow-empty` to tolerate a run that records no previews. `build` takes an optional bundle path — with none, it uses the project's bundle directory — and `-o <dir>` for the site output (default `<project>/phonebook-site`).
+Both `generate` and `build` accept `-C <dir>` (project directory containing `phonebook.config.json`). `generate` takes `-o <dir>` to override the bundle output and `--allow-empty` to tolerate a run that records no previews. `build` takes an optional bundle path — with none, it uses the project's bundle directory — and `-o <dir>` for the site output; without `-o`, `build` writes `index.html` straight into the bundle directory and reuses its `images/` in place (no copying), which is what the quickstarts above do. Pass `-o <dir>` to instead copy the bundle's images into a separate, standalone site directory.
 
 ## `phonebook init` and `phonebook doctor`
 

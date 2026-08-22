@@ -100,3 +100,52 @@ describe('buildSite', () => {
     expect(files.sort()).toEqual(['button-default.png', 'button-disabled.png', 'card.png', 'weird.png'].sort());
   });
 });
+
+describe('buildSite in-place mode (outDir === bundleDir)', () => {
+  let bundleDir: string;
+
+  beforeAll(async () => {
+    const root = await mkdtemp(join(tmpdir(), 'phonebook-site-inplace-test-'));
+    bundleDir = join(root, 'bundle');
+    await mkdir(join(bundleDir, 'images'), { recursive: true });
+
+    const pngBuffer = Buffer.from(TINY_PNG_BASE64, 'base64');
+    await writeFile(join(bundleDir, 'images', 'button-default.png'), pngBuffer);
+
+    const manifest: Manifest = {
+      schemaVersion: 1,
+      platform: 'android',
+      app: { name: 'Sample App', generatedAt: '2026-08-21T00:00:00.000Z' },
+      entries: [
+        {
+          component: 'Button',
+          state: 'Default',
+          module: 'ui',
+          previewName: 'ButtonDefaultPreview',
+          image: 'images/button-default.png',
+        },
+      ],
+    };
+    await writeFile(join(bundleDir, 'manifest.json'), JSON.stringify(manifest), 'utf8');
+  });
+
+  afterAll(async () => {
+    await rm(bundleDir, { recursive: true, force: true });
+  });
+
+  it('writes index.html directly into the bundle directory without duplicating images', async () => {
+    const count = await buildSite(bundleDir, bundleDir);
+    expect(count).toBe(1);
+
+    const bundleEntries = await readdir(bundleDir);
+    expect(bundleEntries.sort()).toEqual(['images', 'index.html', 'manifest.json'].sort());
+
+    // Images were not copied anywhere else — the single images/ dir still
+    // holds exactly the one file that was there before buildSite ran.
+    const imageFiles = await readdir(join(bundleDir, 'images'));
+    expect(imageFiles).toEqual(['button-default.png']);
+
+    const html = await readFile(join(bundleDir, 'index.html'), 'utf8');
+    expect(html).toContain('images/button-default.png');
+  });
+});
