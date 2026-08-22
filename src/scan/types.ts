@@ -46,5 +46,8 @@ export interface CoverageReport {
     withDarkPreview: number;
     totalPreviews: number;
     hintCount: number;
+    /** Components whose only preview is themselves (the @Preview-on-the-composable
+     * pattern for screen-level composables with default parameters). */
+    selfPreviewed: number;
   };
 }

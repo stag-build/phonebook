@@ -190,12 +190,16 @@ function computeStats(components: ScannedComponent[], orphanPreviews: ScannedPre
     components.reduce((sum, c) => sum + c.previews.length, 0) + orphanPreviews.length;
   const allPreviews = [...components.flatMap((c) => c.previews), ...orphanPreviews];
   const hintCount = allPreviews.reduce((sum, p) => sum + (p.hints?.length ?? 0), 0);
+  // Unlike Android's @Preview (which annotates the composable itself), #Preview is
+  // always a separate top-level block, so a SwiftUI View struct can't be its own
+  // preview. No self-preview pattern exists here.
   return {
     components: components.length,
     withPreview,
     withDarkPreview,
     totalPreviews,
     hintCount,
+    selfPreviewed: 0,
   };
 }
 

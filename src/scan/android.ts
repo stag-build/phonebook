@@ -54,6 +54,7 @@ function scanKotlinFile(
 
   const fileComponents: ScannedComponent[] = [];
   const filePreviews: ScannedPreview[] = [];
+  const previewComposables: { fn: RawFunction; preview: ScannedPreview }[] = [];
 
   for (const fn of functions) {
     const isComposable = /@Composable\b/.test(fn.annotations);
@@ -61,7 +62,10 @@ function scanKotlinFile(
 
     const previewMatches = [...fn.annotations.matchAll(/@Preview\b(\([^)]*\))?/g)];
     if (previewMatches.length > 0) {
-      // Preview function: not itself a component.
+      // @Preview @Composable: either a wrapper preview of a separate component, or
+      // a "self-preview" (a screen-level composable that previews itself via
+      // default parameters). Decided below once all non-preview components in the
+      // file are known.
       let displayName: string | undefined;
       let dark = false;
       for (const m of previewMatches) {
@@ -80,14 +84,17 @@ function scanKotlinFile(
         annotationText,
       });
 
-      filePreviews.push({
-        name: fn.name,
-        ...(displayName ? { displayName } : {}),
-        file: relFile,
-        line: fn.line,
-        dark,
-        annotationText,
-        ...(hints.length > 0 ? { hints } : {}),
+      previewComposables.push({
+        fn,
+        preview: {
+          name: fn.name,
+          ...(displayName ? { displayName } : {}),
+          file: relFile,
+          line: fn.line,
+          dark,
+          annotationText,
+          ...(hints.length > 0 ? { hints } : {}),
+        },
       });
     } else {
       fileComponents.push({
@@ -99,7 +106,36 @@ function scanKotlinFile(
     }
   }
 
+  // Classify each @Preview-annotated composable: if its name matches an existing
+  // non-preview component in this file by the prefix heuristic, it's a wrapper
+  // preview of that component (existing behavior). Otherwise it's a self-preview:
+  // the function is both a component and its own preview.
+  for (const { fn, preview } of previewComposables) {
+    const wrapperTarget = bestPrefixMatch(fn.name, fileComponents);
+    if (wrapperTarget) {
+      filePreviews.push(preview);
+    } else {
+      fileComponents.push({
+        name: fn.name,
+        file: relFile,
+        line: fn.line,
+        previews: [preview],
+      });
+    }
+  }
+
   return { fileComponents, filePreviews };
+}
+
+/** Longest-name-prefix match, same heuristic as `matchPreviewsToComponents`. */
+function bestPrefixMatch(name: string, components: ScannedComponent[]): ScannedComponent | undefined {
+  let best: ScannedComponent | undefined;
+  for (const comp of components) {
+    if (name.startsWith(comp.name)) {
+      if (!best || comp.name.length > best.name.length) best = comp;
+    }
+  }
+  return best;
 }
 
 /**
@@ -166,12 +202,16 @@ function computeStats(components: ScannedComponent[], orphanPreviews: ScannedPre
     components.reduce((sum, c) => sum + c.previews.length, 0) + orphanPreviews.length;
   const allPreviews = [...components.flatMap((c) => c.previews), ...orphanPreviews];
   const hintCount = allPreviews.reduce((sum, p) => sum + (p.hints?.length ?? 0), 0);
+  const selfPreviewed = components.filter((c) =>
+    c.previews.some((p) => p.name === c.name && p.line === c.line),
+  ).length;
   return {
     components: components.length,
     withPreview,
     withDarkPreview,
     totalPreviews,
     hintCount,
+    selfPreviewed,
   };
 }
 

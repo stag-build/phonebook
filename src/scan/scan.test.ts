@@ -87,6 +87,53 @@ private fun MysteryPreview() {
       'utf8',
     );
 
+    // Self-preview pattern: @Preview directly on the composable it previews, no
+    // separate component.
+    await writeFile(
+      join(srcDir, 'SplashContent.kt'),
+      `package dev.stag
+
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.tooling.preview.Preview
+
+@Preview(showBackground = true)
+@Composable
+fun SplashContentLandscape(onNavigateToSignup: () -> Unit = {}) {
+    Text("splash")
+}
+`,
+      'utf8',
+    );
+
+    // Both patterns in one file: a wrapper preview of SecondaryButton, plus a
+    // self-previewed screen-level composable.
+    await writeFile(
+      join(srcDir, 'Mixed.kt'),
+      `package dev.stag
+
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.tooling.preview.Preview
+
+@Composable
+fun SecondaryButton(text: String) {
+    Text(text)
+}
+
+@Preview
+@Composable
+private fun SecondaryButtonPreview() {
+    SecondaryButton(text = "Cancel")
+}
+
+@Preview
+@Composable
+fun MixedScreen() {
+    Text("mixed screen")
+}
+`,
+      'utf8',
+    );
+
     // A build output directory that must be skipped.
     const buildDir = join(projectDir, 'app', 'src', 'main', 'java', 'dev', 'stag', 'build');
     await mkdir(buildDir, { recursive: true });
@@ -144,17 +191,55 @@ fun ShouldBeIgnored() {}
     expect(light?.dark).toBe(false);
   });
 
-  it('puts unmatched previews into orphanPreviews', async () => {
+  it('treats a @Preview composable with no matching component as a self-preview, not an orphan', async () => {
+    // MysteryPreview has no separate non-preview composable in its file to attach
+    // to (unlike PrimaryButton/UserCard's wrapper previews), so it becomes a
+    // component that is its own preview, per the self-preview pattern.
     const report = await scanAndroid(projectDir, [':app']);
-    expect(report.orphanPreviews.map((p) => p.name)).toContain('MysteryPreview');
+    expect(report.orphanPreviews.map((p) => p.name)).not.toContain('MysteryPreview');
+    const mystery = report.components.find((c) => c.name === 'MysteryPreview');
+    expect(mystery?.previews.map((p) => p.name)).toEqual(['MysteryPreview']);
+  });
+
+  it('self-preview pattern: a @Preview @Composable fun with no separate component becomes a component covered by itself', async () => {
+    const report = await scanAndroid(projectDir, [':app']);
+    const splash = report.components.find((c) => c.name === 'SplashContentLandscape');
+    expect(splash).toBeDefined();
+    expect(splash?.previews.map((p) => p.name)).toEqual(['SplashContentLandscape']);
+    expect(report.orphanPreviews.map((p) => p.name)).not.toContain('SplashContentLandscape');
+  });
+
+  it('wrapper pattern: a @Preview fun matching an existing component by name-prefix still attaches to it, not itself', async () => {
+    const report = await scanAndroid(projectDir, [':app']);
+    const secondary = report.components.find((c) => c.name === 'SecondaryButton');
+    expect(secondary?.previews.map((p) => p.name)).toEqual(['SecondaryButtonPreview']);
+    // The wrapper preview function itself is not a separate component.
+    expect(report.components.map((c) => c.name)).not.toContain('SecondaryButtonPreview');
+  });
+
+  it('handles both the wrapper and self-preview patterns in the same file', async () => {
+    const report = await scanAndroid(projectDir, [':app']);
+    const secondary = report.components.find((c) => c.name === 'SecondaryButton');
+    const mixedScreen = report.components.find((c) => c.name === 'MixedScreen');
+    expect(secondary?.previews.map((p) => p.name)).toEqual(['SecondaryButtonPreview']);
+    expect(mixedScreen?.previews.map((p) => p.name)).toEqual(['MixedScreen']);
   });
 
   it('computes stats', async () => {
     const report = await scanAndroid(projectDir, [':app']);
-    expect(report.stats.components).toBe(2);
-    expect(report.stats.withPreview).toBe(2);
+    // PrimaryButton, UserCard, MysteryPreview, SplashContentLandscape,
+    // SecondaryButton, MixedScreen.
+    expect(report.stats.components).toBe(6);
+    expect(report.stats.withPreview).toBe(6);
     expect(report.stats.withDarkPreview).toBe(1);
-    expect(report.stats.totalPreviews).toBe(5); // 2 + 2 + 1 orphan
+    expect(report.stats.totalPreviews).toBe(8); // 2 + 2 + 1 + 1 + 1 + 1, no orphans
+    expect(report.orphanPreviews).toEqual([]);
+  });
+
+  it('reports selfPreviewed count in stats', async () => {
+    const report = await scanAndroid(projectDir, [':app']);
+    // MysteryPreview, SplashContentLandscape, MixedScreen.
+    expect(report.stats.selfPreviewed).toBe(3);
   });
 
   it('reports file paths relative to projectDir', async () => {
@@ -330,6 +415,9 @@ struct IgnoredView: View {
     expect(report.stats.withPreview).toBe(2);
     expect(report.stats.withDarkPreview).toBe(1);
     expect(report.stats.totalPreviews).toBe(5); // 2 + 2 + 1 orphan
+    // #Preview is always a separate top-level block on iOS; a View struct can't
+    // be its own preview the way an Android @Preview @Composable can.
+    expect(report.stats.selfPreviewed).toBe(0);
   });
 
   it('reports file paths relative to projectDir', async () => {

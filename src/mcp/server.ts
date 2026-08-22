@@ -33,11 +33,16 @@ function textResult(text: string) {
 
 function summarizeCoverage(report: CoverageReport): string {
   const { stats } = report;
+  const withoutPreview = stats.components - stats.withPreview;
+  const orphanCount = report.orphanPreviews.length;
   return [
     `Components: ${stats.components}`,
     `With preview: ${stats.withPreview}`,
+    `Without preview: ${withoutPreview}`,
     `With dark preview: ${stats.withDarkPreview}`,
-    `Orphan previews (unmatched to a component): ${report.orphanPreviews.length}`,
+    orphanCount > 0
+      ? `Orphan previews (could not be matched to a component in the same file): ${orphanCount}`
+      : `Orphan previews (unmatched to a component): ${orphanCount}`,
   ].join('\n');
 }
 
