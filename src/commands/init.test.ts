@@ -144,7 +144,7 @@ async function writeIosFixture(
   }
 }
 
-const EXISTING_SUBCLASS_SOURCE = `import SnapshotPreviews
+const EXISTING_SUBCLASS_SOURCE = `import SnapshottingTests
 
 class ExistingSnapshots: SnapshotTest {
   override class func snapshotPreviews() -> [String]? { nil }
@@ -171,7 +171,7 @@ describe('tryWriteSnapshotClass', () => {
     expect(result.path).toBe(join(dir, 'UnitTests', 'PhonebookSnapshots.swift'));
 
     const written = await readFile(join(dir, 'UnitTests', 'PhonebookSnapshots.swift'), 'utf8');
-    expect(written).toContain('import SnapshotPreviews');
+    expect(written).toContain('import SnapshottingTests');
     expect(written).toContain('class Snapshots: SnapshotTest {');
     expect(written).toContain('override class func snapshotPreviews() -> [String]? { nil }');
     // The instructions-snippet indentation must not leak into the written file.

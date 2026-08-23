@@ -64,6 +64,17 @@ export function diagnoseGradleFailure(output: string): string[] {
 export function diagnoseXcodebuildFailure(output: string): string[] {
   const lines: string[] = [];
 
+  const missingModule = output.match(/Unable to find module dependency: '([^']+)'/);
+  if (missingModule) {
+    lines.push(
+      `A Swift file imports '${missingModule[1]}', but the target does not link a module with that name.`,
+    );
+    lines.push(
+      "The SnapshotTest base class lives in the SnapshottingTests module — the snapshot test file should say " +
+        '`import SnapshottingTests`. Otherwise, add the missing package product to the test target in Xcode.',
+    );
+  }
+
   if (/Failed to install or launch the test runner|Mach error -308|\(ipc\/mig\) server died/.test(output)) {
     lines.push(
       'The iOS simulator runtime died while installing the test runner — usually transient, not a setup problem.',

@@ -135,6 +135,14 @@ e: org.jetbrains.kotlin.util.FileAnalysisException: While analysing /project/app
 });
 
 describe('diagnoseXcodebuildFailure', () => {
+  it('diagnoses a missing module dependency import', () => {
+    const out = diagnoseXcodebuildFailure(
+      "Testing failed:\n\tUnable to find module dependency: 'SnapshotPreviews'\nimport SnapshotPreviews\n       ^\n\tTesting cancelled because the build failed.\n** TEST FAILED **",
+    );
+    expect(out.join('\n')).toContain("imports 'SnapshotPreviews'");
+    expect(out.join('\n')).toContain('import SnapshottingTests');
+  });
+
   it('flags a dead simulator-runtime Mach error installing the test runner', () => {
     const output = `
 Testing failed:

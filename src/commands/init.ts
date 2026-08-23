@@ -436,7 +436,7 @@ This project uses a Gradle version catalog ("${prefix}"). Equivalent additions u
 }
 
 /** The SnapshotTest subclass snippet printed by `init` and reused by `doctor`'s snapshot-test-class check. */
-export const IOS_SNAPSHOT_TEST_CLASS_SNIPPET = `     import SnapshotPreviews
+export const IOS_SNAPSHOT_TEST_CLASS_SNIPPET = `     import SnapshottingTests
 
      class Snapshots: SnapshotTest {
        override class func snapshotPreviews() -> [String]? { nil }

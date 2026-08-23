@@ -431,7 +431,7 @@ async function writeIosProject(
   }
 }
 
-const SNAPSHOT_TEST_CLASS_SOURCE = `import SnapshotPreviews
+const SNAPSHOT_TEST_CLASS_SOURCE = `import SnapshottingTests
 
 class Snapshots: SnapshotTest {
   override class func snapshotPreviews() -> [String]? { nil }
@@ -498,7 +498,11 @@ describe('findSnapshotTestSubclass', () => {
     await writeFile(join(dir, 'Tests', 'Snapshots.swift'), SNAPSHOT_TEST_CLASS_SOURCE);
 
     const result = await findSnapshotTestSubclass(dir);
-    expect(result).toEqual({ className: 'Snapshots', relativePath: join('Tests', 'Snapshots.swift') });
+    expect(result).toEqual({
+      className: 'Snapshots',
+      relativePath: join('Tests', 'Snapshots.swift'),
+      importsSnapshottingTests: true,
+    });
   });
 
   it('returns undefined when no subclass exists', async () => {

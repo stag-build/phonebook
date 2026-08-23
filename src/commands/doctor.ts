@@ -691,7 +691,15 @@ async function runIosChecks(
 
   if (hasSnapshotPreviews) {
     const subclass = await findSnapshotTestSubclass(projectDir);
-    if (subclass) {
+    if (subclass && !subclass.importsSnapshottingTests) {
+      allOk = print('snapshot-test-class', {
+        ok: false,
+        detail:
+          `${subclass.relativePath} subclasses SnapshotTest but does not import SnapshottingTests — ` +
+          'the base class lives in that module, so the file will not compile. ' +
+          'Change its import line to: import SnapshottingTests',
+      }) && allOk;
+    } else if (subclass) {
       allOk = print('snapshot-test-class', {
         ok: true,
         detail: `SnapshotTest subclass found: ${subclass.className} (${subclass.relativePath})`,

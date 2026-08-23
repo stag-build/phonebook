@@ -33,8 +33,8 @@ async function readTextIfExists(path: string): Promise<string> {
  */
 export async function findSnapshotTestSubclass(
   projectDir: string,
-): Promise<{ className: string; relativePath: string } | undefined> {
-  async function walk(dir: string): Promise<{ className: string; relativePath: string } | undefined> {
+): Promise<{ className: string; relativePath: string; importsSnapshottingTests: boolean } | undefined> {
+  async function walk(dir: string): Promise<{ className: string; relativePath: string; importsSnapshottingTests: boolean } | undefined> {
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -53,7 +53,13 @@ export async function findSnapshotTestSubclass(
       const text = await readTextIfExists(full);
       const match = text.match(SNAPSHOT_TEST_SUBCLASS_PATTERN);
       if (match) {
-        return { className: match[1], relativePath: relative(projectDir, full) };
+        return {
+          className: match[1],
+          relativePath: relative(projectDir, full),
+          // The SnapshotTest base class lives in the SnapshottingTests module;
+          // any other import (e.g. SnapshotPreviews) fails to compile.
+          importsSnapshottingTests: /^\s*import\s+SnapshottingTests\b/m.test(text),
+        };
       }
     }
     return undefined;
