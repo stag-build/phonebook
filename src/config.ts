@@ -22,6 +22,12 @@ export interface PhonebookConfig {
     scheme?: string;
     /** Simulator destination name. Default: "iPhone 17 Pro" */
     simulator?: string;
+    /**
+     * -only-testing target[/class] passed to xcodebuild, so generate runs just
+     * the snapshot tests instead of the whole suite. Auto-detected from the
+     * SnapshotTest subclass when omitted; set to "" to force the full suite.
+     */
+    onlyTesting?: string;
   };
 }
 

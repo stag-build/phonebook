@@ -116,6 +116,7 @@ Phonebook groups screenshots into `component / state` cards from your existing p
 | `ios.workspace` | string | — | Path to `.xcworkspace`, relative to the config file. |
 | `ios.scheme` | string | — | Required. Scheme that includes the SnapshotPreviews test target. |
 | `ios.simulator` | string | `"iPhone 17 Pro"` | Simulator device name used for `-destination`. |
+| `ios.onlyTesting` | string | auto-detected | `-only-testing:` filter so `generate` runs just the snapshot class, not the app's whole test suite. Auto-derived from the `SnapshotTest` subclass; set `""` to run everything. |
 
 Both `generate` and `build` accept `-C <dir>` (project directory containing `phonebook.config.json`). `generate` takes `-o <dir>` to override the bundle output and `--allow-empty` to tolerate a run that records no previews. `build` takes an optional bundle path — with none, it uses the project's bundle directory — and `-o <dir>` for the site output; without `-o`, `build` writes `index.html` straight into the bundle directory and reuses its `images/` in place (no copying), which is what the quickstarts above do. Pass `-o <dir>` to instead copy the bundle's images into a separate, standalone site directory.
 

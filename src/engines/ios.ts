@@ -8,6 +8,7 @@ import { diagnoseXcodebuildFailure } from '../errors.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
 import { parsePreviewName, spaceCamelCase } from '../naming.js';
 import { gitInfo } from './git.js';
+import { findSnapshotTestSubclass, findSnapshottingTestsTargets, readPbxprojText } from '../ios/snapshotTestClass.js';
 
 /** Builds the error/warning text for a `generate` run that exported zero snapshots. Exported for tests. */
 export function buildEmptySnapshotsMessage(exportDir: string, scheme: string): string {
@@ -16,6 +17,34 @@ export function buildEmptySnapshotsMessage(exportDir: string, scheme: string): s
     `Does the "${scheme}" scheme include a SnapshotPreviews test target, and are your #Preview macros not all ` +
     'filtered out (e.g. by a snapshotPreviews() override that excludes them)?'
   );
+}
+
+
+/**
+ * Resolves the -only-testing:Target/Class argument so `generate` runs just the
+ * snapshot test class instead of the app's whole test suite — an unrelated
+ * failing unit test must not kill screenshot generation (seen in a real repo
+ * whose own tests were flaky). Explicit config wins; "" disables the filter.
+ * Exported for tests.
+ */
+export async function resolveOnlyTesting(
+  config: PhonebookConfig,
+  projectDir: string,
+): Promise<string | undefined> {
+  const configured = config.ios?.onlyTesting;
+  if (configured !== undefined) return configured === '' ? undefined : configured;
+  try {
+    const [subclass, pbxproj] = await Promise.all([
+      findSnapshotTestSubclass(projectDir),
+      readPbxprojText(projectDir, config.ios?.project ? join(projectDir, config.ios.project) : undefined),
+    ]);
+    if (!subclass || !pbxproj) return undefined;
+    const targets = findSnapshottingTestsTargets(pbxproj);
+    if (targets.length !== 1) return undefined;
+    return `${targets[0].name}/${subclass.className}`;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -49,6 +78,8 @@ export async function generateIos(
       '-destination',
       `platform=iOS Simulator,name=${simulator}`,
     ];
+    const onlyTesting = await resolveOnlyTesting(config, projectDir);
+    if (onlyTesting) args.push(`-only-testing:${onlyTesting}`);
     await runXcodebuild(
       projectDir,
       args,

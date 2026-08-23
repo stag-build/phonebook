@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildEmptySnapshotsMessage, mapSidecar } from './ios.js';
+import { buildEmptySnapshotsMessage, mapSidecar, resolveOnlyTesting } from './ios.js';
 
 const sidecar = (over: object = {}, preview: object = {}) => ({
   display_name: 'UserCard/Dark',
@@ -59,5 +59,29 @@ describe('buildEmptySnapshotsMessage', () => {
     expect(message).toContain('"PhonebookSample" scheme');
     expect(message).toContain('SnapshotPreviews test target');
     expect(message).toContain('filtered out');
+  });
+});
+
+describe('resolveOnlyTesting', () => {
+  const cfg = (ios: object) => ({ appName: 'x', platform: 'ios' as const, ios: { scheme: 's', ...ios } });
+
+  it('auto-detects Target/Class from the sample project', async () => {
+    const result = await resolveOnlyTesting(
+      cfg({ project: 'PhonebookSample.xcodeproj' }),
+      'samples/ios',
+    );
+    expect(result).toBe('PhonebookSnapshotTests/PhonebookSnapshotTests');
+  });
+
+  it('honors an explicit override', async () => {
+    expect(await resolveOnlyTesting(cfg({ onlyTesting: 'Custom/Class' }), '/nonexistent')).toBe('Custom/Class');
+  });
+
+  it('empty override disables the filter', async () => {
+    expect(await resolveOnlyTesting(cfg({ onlyTesting: '' }), '/nonexistent')).toBeUndefined();
+  });
+
+  it('returns undefined when nothing can be detected', async () => {
+    expect(await resolveOnlyTesting(cfg({}), '/nonexistent')).toBeUndefined();
   });
 });
