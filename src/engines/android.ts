@@ -127,8 +127,14 @@ interface RoborazziImageMeta {
   tags?: string[];
 }
 
-/** Roborazzi's machine-generated ALL-CAPS markers, e.g. WITH_BACKGROUND, UI_MODE_NIGHT_YES, PIXEL_4_XL. */
-const MACHINE_MARKER = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$/;
+/**
+ * Roborazzi's machine-generated marker chunks are ALL-CAPS alnum, except that
+ * size markers carry a lowercase "dp" unit: WITH_BACKGROUND, UI_MODE_NIGHT_YES,
+ * PIXEL_4_XL, but also W360dp / H96dp (from widthDp/heightDp attributes).
+ * A user's name word like "Green" (initial cap + lowercase) never matches.
+ */
+const MARKER_CHUNK = '[A-Z0-9]+(?:dp)?';
+const MACHINE_MARKER = new RegExp(`^${MARKER_CHUNK}(?:_${MARKER_CHUNK})+$`);
 
 /**
  * Roborazzi sometimes glues a machine-generated marker run directly onto a
@@ -137,7 +143,16 @@ const MACHINE_MARKER = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$/;
  * annotation glued to the "Landscape" state). Unlike MACHINE_MARKER, this
  * only matches a *trailing* run, leaving a leading name intact.
  */
-const GLUED_MARKER_SUFFIX = /(?:_[A-Z0-9]+)+$/;
+const GLUED_MARKER_SUFFIX = new RegExp(`(?:_${MARKER_CHUNK})+$`);
+
+/**
+ * Roborazzi writes the space in @Preview(name = "On Green") as an underscore.
+ * Restore spaces in mixed-case name tokens; a deliberate all-caps state like
+ * NIGHT_MODE has no lowercase and is left untouched.
+ */
+function restoreNameSpaces(token: string): string {
+  return /[a-z]/.test(token) ? token.replace(/_/g, ' ') : token;
+}
 
 /**
  * Strips a trailing glued marker run (see GLUED_MARKER_SUFFIX) off `token`,
@@ -151,7 +166,7 @@ function stripGluedMarker(token: string): { name: string; tag: string } | undefi
   if (!match || match.index === undefined) return undefined;
   const remainder = token.slice(0, match.index);
   if (remainder.length === 0 || !/[a-z]/.test(remainder)) return undefined;
-  return { name: remainder, tag: match[0].slice(1) };
+  return { name: restoreNameSpaces(remainder), tag: match[0].slice(1) };
 }
 
 /**
@@ -211,7 +226,7 @@ export function parseRoborazziFileName(file: string): RoborazziImageMeta {
           nameTokens.push(glued.name);
           tags.push(glued.tag);
         } else {
-          nameTokens.push(token);
+          nameTokens.push(restoreNameSpaces(token));
         }
       }
     }

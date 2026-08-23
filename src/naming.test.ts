@@ -128,6 +128,28 @@ describe('parseRoborazziFileName', () => {
     });
   });
 
+  it('strips widthDp/heightDp markers (lowercase dp unit) and restores name spaces', () => {
+    // Real output: @Preview(name = "PrimaryButton/On Green", widthDp = 360,
+    // heightDp = 96, showBackground = true). Roborazzi writes the space as an
+    // underscore and glues W360dp/H96dp (mixed-case unit) plus WITH_BACKGROUND.
+    const m = parseRoborazziFileName(
+      'com.om.spotifyuiapp.ui.features.login.LoginContentKt.PrimaryButtonGreenPreview.' +
+        'PrimaryButton/On_Green_W360dp_H96dp_WITH_BACKGROUND.png',
+    );
+    expect(m.displayName).toBe('PrimaryButton/On Green');
+    expect(m.tags).toEqual(['W360dp_H96dp_WITH_BACKGROUND']);
+    expect(parsePreviewName(m.functionName, m.displayName)).toEqual({
+      component: 'Primary Button',
+      state: 'On Green',
+    });
+  });
+
+  it('classifies a whole segment of dp-unit markers as machine markers', () => {
+    const m = parseRoborazziFileName('dev.stag.sample.CardKt.CardPreview.W360dp_H96dp.png');
+    expect(m.displayName).toBeUndefined();
+    expect(m.tags).toEqual(['W360dp_H96dp']);
+  });
+
   it('strips a device-spec marker glued to the state with underscores', () => {
     // Real output from Roborazzi 1.72.0: the device annotation is glued
     // directly onto the "Landscape" state within the same dot-segment.
