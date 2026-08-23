@@ -99,6 +99,32 @@ describe('buildSite', () => {
     const files = await readdir(join(outDir, 'images'));
     expect(files.sort()).toEqual(['button-default.png', 'button-disabled.png', 'card.png', 'weird.png'].sort());
   });
+
+  it('renders one modal trigger per entry, not a raw <a> around the image', async () => {
+    const html = await readFile(join(outDir, 'index.html'), 'utf8');
+    const triggers = html.match(/class="card-trigger"/g) ?? [];
+    expect(triggers.length).toBe(4);
+    expect(html).not.toMatch(/<a href="images\/[^"]+"[^>]*target="_blank"/);
+  });
+
+  it('preserves the raw image path on each trigger for the open-file link', async () => {
+    const html = await readFile(join(outDir, 'index.html'), 'utf8');
+    expect(html).toContain('data-image="images/button-default.png"');
+    expect(html).toContain('data-image="images/card.png"');
+  });
+
+  it('contains the modal overlay markup with a close control and open-file link', async () => {
+    const html = await readFile(join(outDir, 'index.html'), 'utf8');
+    expect(html).toContain('id="modal-overlay"');
+    expect(html).toContain('id="modal-close"');
+    expect(html).toContain('id="modal-image"');
+    expect(html).toContain('id="modal-open-file"');
+  });
+
+  it('escapes component/state names in the modal caption data attribute', async () => {
+    const html = await readFile(join(outDir, 'index.html'), 'utf8');
+    expect(html).toContain('data-caption="&lt;Weird &amp; &quot;Tricky&quot;&gt; — Odd"');
+  });
 });
 
 describe('buildSite in-place mode (outDir === bundleDir)', () => {

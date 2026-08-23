@@ -131,6 +131,30 @@ interface RoborazziImageMeta {
 const MACHINE_MARKER = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$/;
 
 /**
+ * Roborazzi sometimes glues a machine-generated marker run directly onto a
+ * user-chosen display-name token within the same dot-segment, e.g.
+ * "Landscape_WIDTH_891DP_HEIGHT_411DP_ORIENTATION_LANDSCAPE" (device-spec
+ * annotation glued to the "Landscape" state). Unlike MACHINE_MARKER, this
+ * only matches a *trailing* run, leaving a leading name intact.
+ */
+const GLUED_MARKER_SUFFIX = /(?:_[A-Z0-9]+)+$/;
+
+/**
+ * Strips a trailing glued marker run (see GLUED_MARKER_SUFFIX) off `token`,
+ * returning the remaining name plus the stripped run as a single tag. Returns
+ * undefined when there is no glued suffix, or when stripping it would leave
+ * an empty or all-caps-only remainder (a deliberate state like "NIGHT_MODE"
+ * has no lowercase to strip down to, so it is left intact).
+ */
+function stripGluedMarker(token: string): { name: string; tag: string } | undefined {
+  const match = token.match(GLUED_MARKER_SUFFIX);
+  if (!match || match.index === undefined) return undefined;
+  const remainder = token.slice(0, match.index);
+  if (remainder.length === 0 || !/[a-z]/.test(remainder)) return undefined;
+  return { name: remainder, tag: match[0].slice(1) };
+}
+
+/**
  * Roborazzi + ComposablePreviewScanner names recorded images
  * `<package>.<FileKt>.<PreviewFunction>[.<preview display name>].png`, where a
  * display name containing "/" becomes real subdirectories on disk (verified
@@ -181,7 +205,15 @@ export function parseRoborazziFileName(file: string): RoborazziImageMeta {
       if (token === 'NIGHT') theme = 'dark';
       else if (token === 'NOTNIGHT') theme = 'light';
       else if (MACHINE_MARKER.test(token)) tags.push(token);
-      else nameTokens.push(token);
+      else {
+        const glued = stripGluedMarker(token);
+        if (glued) {
+          nameTokens.push(glued.name);
+          tags.push(glued.tag);
+        } else {
+          nameTokens.push(token);
+        }
+      }
     }
     if (nameTokens.length > 0) nameLevels.push(nameTokens.join('.'));
   }

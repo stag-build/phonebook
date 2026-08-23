@@ -34,6 +34,13 @@ describe('parsePreviewName', () => {
   it('keeps name when it is only "Preview"', () => {
     expect(parsePreviewName('Preview').component).toBe('Preview');
   });
+
+  it('does not touch a deliberate NIGHT_MODE state (all-caps remainder guard)', () => {
+    expect(parsePreviewName('BannerPreview', 'Banner/NIGHT_MODE')).toEqual({
+      component: 'Banner',
+      state: 'NIGHT_MODE',
+    });
+  });
 });
 
 describe('spaceCamelCase', () => {
@@ -118,6 +125,21 @@ describe('parseRoborazziFileName', () => {
     expect(parsePreviewName(m.functionName, m.displayName)).toEqual({
       component: 'Banner',
       state: 'ERROR',
+    });
+  });
+
+  it('strips a device-spec marker glued to the state with underscores', () => {
+    // Real output from Roborazzi 1.72.0: the device annotation is glued
+    // directly onto the "Landscape" state within the same dot-segment.
+    const m = parseRoborazziFileName(
+      'com.om.spotifyuiapp.ui.features.login.LoginContentLandscapeKt.LoginContentLandscape.' +
+        'LoginContent/Landscape_WIDTH_891DP_HEIGHT_411DP_ORIENTATION_LANDSCAPE.png',
+    );
+    expect(m.displayName).toBe('LoginContent/Landscape');
+    expect(m.tags).toEqual(['WIDTH_891DP_HEIGHT_411DP_ORIENTATION_LANDSCAPE']);
+    expect(parsePreviewName(m.functionName, m.displayName)).toEqual({
+      component: 'Login Content',
+      state: 'Landscape',
     });
   });
 });
