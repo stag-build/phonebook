@@ -90,7 +90,9 @@ Configuration hints: analyze_coverage also flags previews whose name implies a c
 
 Canvas size (Android): preview dimensions come only from the @Preview annotation — widthDp/heightDp or device = "spec:width=..dp,height=..dp,...". Wrapping the composable in Modifier.size(...)/width(...)/height(...) in the preview body does NOT resize the canvas: the content is sized inside a canvas that stays the default phone size, so wide or large content is clipped, not fit. Correct: @Preview(widthDp = 891, heightDp = 411) fun ... { LoginContentLandscape() } — no size Modifier needed.
 
-Canvas size (iOS): preview dimensions come from traits: (e.g. .fixedLayout(width:height:)) or .previewDevice on the #Preview, not from a frame modifier in the view body.`;
+Canvas size (iOS): preview dimensions come from traits: (e.g. .fixedLayout(width:height:)) or .previewDevice on the #Preview, not from a frame modifier in the view body.
+
+Snapshot test class (iOS): the SnapshotTest subclass that records previews must live in the app-hosted unit-test target's own folder (the target linking SnapshottingTests, hosted via TEST_HOST/BUNDLE_LOADER) — run \`phonebook doctor\` to see which target and where. In a project using Xcode's filesystem-synchronized groups, just creating the file in that folder is enough (Xcode picks it up automatically); \`phonebook init --write-snapshot-class\` can do this for you when that condition holds.`;
 
 function androidTemplate(component: string, states: string[]): string {
   const name = component || 'Component';

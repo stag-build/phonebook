@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diagnoseGradleFailure } from './errors.js';
+import { diagnoseGradleFailure, diagnoseXcodebuildFailure } from './errors.js';
 
 describe('diagnoseGradleFailure', () => {
   it('flags a Roborazzi/Kotlin metadata incompatibility, with parsed versions', () => {
@@ -131,5 +131,66 @@ e: org.jetbrains.kotlin.util.FileAnalysisException: While analysing /project/app
     expect(lines).toEqual([
       'Missing test dependency: add testImplementation("androidx.compose.ui:ui-test-junit4") to the module.',
     ]);
+  });
+});
+
+describe('diagnoseXcodebuildFailure', () => {
+  it('flags a dead simulator-runtime Mach error installing the test runner', () => {
+    const output = `
+Testing failed:
+    The operation couldn't be completed. (Mach error -308 - (ipc/mig) server died)
+    CountriesSwiftUI encountered an error (Failed to install or launch the test runner. (Underlying Error: The operation couldn't be completed. (Mach error -308 - (ipc/mig) server died)))
+** TEST FAILED **
+error: xcodebuild failed (exit 65) running: xcodebuild test -project CountriesSwiftUI.xcodeproj -scheme CountriesSwiftUI -destination platform=iOS Simulator,name=iPhone 17 Pro
+`;
+    const lines = diagnoseXcodebuildFailure(output);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('simulator runtime died');
+    expect(lines[0]).toContain('usually transient');
+    expect(lines[1]).toContain('xcrun simctl shutdown all');
+    expect(lines[1]).toContain('xcrun simctl erase');
+    expect(lines[1]).toContain('Simulator.app');
+  });
+
+  it('flags a scheme with no runnable tests', () => {
+    const output = 'Scheme MyApp is not currently configured for the test action.';
+    const lines = diagnoseXcodebuildFailure(output);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("scheme's Test action has no runnable tests");
+    expect(lines[0]).toContain('phonebook doctor');
+  });
+
+  it('flags a scheme with no runnable tests ("does not contain any tests")', () => {
+    const output = 'Scheme MyApp does not contain any tests.';
+    const lines = diagnoseXcodebuildFailure(output);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("scheme's Test action has no runnable tests");
+  });
+
+  it('flags a scheme with no runnable tests ("There are no test bundles")', () => {
+    const output = 'There are no test bundles for the "MyApp" scheme.';
+    const lines = diagnoseXcodebuildFailure(output);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("scheme's Test action has no runnable tests");
+  });
+
+  it('flags an unmatched simulator destination', () => {
+    const output = 'xcodebuild: error: Unable to find a destination matching the provided destination specifier';
+    const lines = diagnoseXcodebuildFailure(output);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('No simulator matches the configured name');
+    expect(lines[0]).toContain('xcrun simctl list devices available');
+    expect(lines[0]).toContain('ios.simulator');
+  });
+
+  it('flags an unmatched device destination ("matching device")', () => {
+    const output = 'xcodebuild: error: Unable to find a device matching the provided destination specifier';
+    const lines = diagnoseXcodebuildFailure(output);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('No simulator matches the configured name');
+  });
+
+  it('returns an empty array for unrecognized output', () => {
+    expect(diagnoseXcodebuildFailure('BUILD SUCCEEDED')).toEqual([]);
   });
 });

@@ -55,3 +55,43 @@ export function diagnoseGradleFailure(output: string): string[] {
 
   return lines;
 }
+
+/**
+ * Signature matching over raw xcodebuild output, turning known failure
+ * patterns into human diagnosis lines. Zero lines means "no known signature
+ * matched" — the raw output should still be shown to the user.
+ */
+export function diagnoseXcodebuildFailure(output: string): string[] {
+  const lines: string[] = [];
+
+  if (/Failed to install or launch the test runner|Mach error -308|\(ipc\/mig\) server died/.test(output)) {
+    lines.push(
+      'The iOS simulator runtime died while installing the test runner — usually transient, not a setup problem.',
+    );
+    lines.push(
+      'Retry once; if it persists run: xcrun simctl shutdown all  (and if still failing: xcrun simctl erase ' +
+        '"<device name>"). First boot of a newly installed runtime can also take minutes — let it finish in ' +
+        'Simulator.app before retrying.',
+    );
+  }
+
+  if (
+    /Scheme (.+?) is not currently configured for the test action|does not contain any tests|There are no test bundles/.test(
+      output,
+    )
+  ) {
+    lines.push(
+      "The scheme's Test action has no runnable tests. Ensure the test target with your SnapshotTest subclass " +
+        'is included in the scheme\'s Test action, then run `phonebook doctor`.',
+    );
+  }
+
+  if (/Unable to find a d(?:estination|evice) matching/.test(output)) {
+    lines.push(
+      'No simulator matches the configured name. List devices with: xcrun simctl list devices available — ' +
+        'then update ios.simulator in phonebook.config.json.',
+    );
+  }
+
+  return lines;
+}

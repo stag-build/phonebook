@@ -123,7 +123,9 @@ Both `generate` and `build` accept `-C <dir>` (project directory containing `pho
 
 `phonebook init` detects your platform and scaffolds `phonebook.config.json` plus the dependency/setup snippets — with library versions resolved against your project's Kotlin version and your app package filled in. It never edits your build files for you.
 
-`phonebook doctor` checks that everything `generate` needs is wired up: plugin and test dependencies (resolved through Gradle version catalogs when you use them), the scanner's `packages` value, Kotlin/Roborazzi compatibility, and the toolchain (JDK/Xcode/simulator). Add `--deep` to also compile the test sources — slower, but authoritative when a static check and reality disagree.
+`phonebook doctor` checks that everything `generate` needs is wired up: plugin and test dependencies (resolved through Gradle version catalogs when you use them), the scanner's `packages` value, Kotlin/Roborazzi compatibility, and the toolchain (JDK/Xcode/simulator). Add `--deep` to also compile the test sources — slower, but authoritative when a static check and reality disagree. On iOS, if SnapshotPreviews is linked but no `SnapshotTest` subclass exists yet, `doctor` names the exact target and folder to add it to (parsed from the `.pbxproj`), so you're never just told to "add the class" with no location.
+
+`phonebook init --write-snapshot-class` is the one exception to init's hands-off rule: when doctor's iOS check identifies the linking target *and* that target's source folder is one of Xcode's filesystem-synchronized groups, it writes `<folder>/PhonebookSnapshots.swift` directly — safe because a synchronized folder is picked up by Xcode automatically, so no `project.pbxproj` edit is made. It refuses (with the reason) in every other case: no SnapshotPreviews wiring yet, a non-synchronized-group project, or a subclass that already exists.
 
 `phonebook mcp` runs an MCP server exposing coverage analysis, setup checks, preview guidance, and the generate/build commands to a coding agent.
 

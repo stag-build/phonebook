@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { loadConfig, type PhonebookConfig } from '../config.js';
-import { diagnoseGradleFailure } from '../errors.js';
+import { diagnoseGradleFailure, diagnoseXcodebuildFailure } from '../errors.js';
 import { runGradle } from '../engines/android.js';
 import {
   canRead,
@@ -18,7 +18,14 @@ import {
   UNIT_TEST_CONFIGURATIONS,
   type VersionCatalog,
 } from '../gradle/catalog.js';
-import { detectAndroidPackage } from './init.js';
+import { detectAndroidPackage, IOS_SNAPSHOT_TEST_CLASS_SNIPPET } from './init.js';
+import {
+  findMissingTestHostNote,
+  findSnapshotTestClassLocation,
+  findSnapshotTestSubclass,
+} from '../ios/snapshotTestClass.js';
+
+export { findMissingTestHostNote, findSnapshotTestClassLocation, findSnapshotTestSubclass };
 
 interface CheckResult {
   ok: boolean;
@@ -664,6 +671,7 @@ async function runIosChecks(
       // projectDir unreadable; leave pbxprojTexts empty.
     }
   }
+  const pbxprojOnlyText = pbxprojTexts.join('\n');
   const packageResolvedPaths = [
     projectPath ? join(projectPath, 'project.xcworkspace', 'xcshareddata', 'swiftpm', 'Package.resolved') : undefined,
     workspacePath ? join(workspacePath, 'xcshareddata', 'swiftpm', 'Package.resolved') : undefined,
@@ -680,6 +688,41 @@ async function runIosChecks(
     ok: false,
     detail: 'SnapshotPreviews / SnapshottingTests not found in .pbxproj or Package.resolved; run `phonebook init` for setup instructions',
   }) && allOk;
+
+  if (hasSnapshotPreviews) {
+    const subclass = await findSnapshotTestSubclass(projectDir);
+    if (subclass) {
+      allOk = print('snapshot-test-class', {
+        ok: true,
+        detail: `SnapshotTest subclass found: ${subclass.className} (${subclass.relativePath})`,
+      }) && allOk;
+    } else {
+      const preamble =
+        'SnapshotPreviews is linked but no SnapshotTest subclass exists — without it the test target records nothing. ';
+      const location = findSnapshotTestClassLocation(pbxprojOnlyText);
+      let detail: string;
+      if (location?.synchronizedFolder) {
+        detail =
+          preamble +
+          `Add the file ${location.synchronizedFolder}/PhonebookSnapshots.swift (this project uses synchronized ` +
+          `groups, so creating the file is enough):\n\n${IOS_SNAPSHOT_TEST_CLASS_SNIPPET}\n\n` +
+          `or run: phonebook init --write-snapshot-class -C ${projectDir}`;
+      } else if (location) {
+        detail =
+          preamble +
+          `Create the file and add it to the ${location.targetName} target in Xcode (File > Add Files, check ` +
+          `the ${location.targetName} box):\n\n${IOS_SNAPSHOT_TEST_CLASS_SNIPPET}`;
+      } else {
+        detail = preamble + `Add to your test target:\n\n${IOS_SNAPSHOT_TEST_CLASS_SNIPPET}`;
+      }
+      allOk = print('snapshot-test-class', { ok: false, detail }) && allOk;
+    }
+
+    const testHostNote = findMissingTestHostNote(pbxprojOnlyText);
+    if (testHostNote) {
+      print('test-host', { ok: true, detail: '', note: testHostNote });
+    }
+  }
 
   const simulator = ios.simulator ?? 'iPhone 17 Pro';
   const simctlResult = await runCapture('xcrun', ['simctl', 'list', 'devices', 'available']);
@@ -730,7 +773,7 @@ async function runIosDeepCheck(
     });
   }
   const compilerErrors = extractCompilerErrors(output).slice(0, 3);
-  const diagnosis = diagnoseGradleFailure(output);
+  const diagnosis = diagnoseXcodebuildFailure(output);
   const detailLines = [
     `xcodebuild build-for-testing failed (exit ${result.code}) for scheme "${ios.scheme}"`,
     ...compilerErrors,

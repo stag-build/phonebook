@@ -1,8 +1,13 @@
-import { access, readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
 import { loadConfig, type PhonebookConfig } from '../config.js';
 import { detectKotlinVersion, resolveMaxCompatible } from '../versions.js';
 import { accessorFor, loadVersionCatalog, pluginAccessorFor } from '../gradle/catalog.js';
+import {
+  findSnapshotTestClassLocation,
+  findSnapshotTestSubclass,
+  readPbxprojText,
+} from '../ios/snapshotTestClass.js';
 
 const ROBORAZZI_GROUP = 'io.github.takahirom.roborazzi';
 const ROBORAZZI_ARTIFACT = 'roborazzi';
@@ -124,7 +129,7 @@ async function detectPlatform(
   return { platform: undefined };
 }
 
-export async function runInit(dir: string): Promise<void> {
+export async function runInit(dir: string, options: { writeSnapshotClass?: boolean } = {}): Promise<void> {
   const projectDir = resolve(dir);
   const configPath = resolve(projectDir, 'phonebook.config.json');
   const alreadyExists = await exists(configPath);
@@ -176,9 +181,109 @@ export async function runInit(dir: string): Promise<void> {
       // Config unreadable/invalid; fall back to the default module.
     }
     await printAndroidInstructions(projectDir, modules);
+    if (options.writeSnapshotClass) {
+      console.log('\n--write-snapshot-class only applies to iOS projects; nothing was written.');
+    }
   } else {
     printIosInstructions();
+    if (options.writeSnapshotClass) {
+      console.log('');
+      const result = await tryWriteSnapshotClass(projectDir);
+      console.log(result.message);
+    }
   }
+}
+
+/**
+ * The ONE exception to `init` never editing your project: writes the missing
+ * SnapshotTest subclass to disk when — and only when — it's provably safe to
+ * do so without touching project.pbxproj: SnapshotPreviews is wired in, the
+ * linking target is identified, that target's source folder is a Xcode
+ * filesystem-synchronized group (so a new file there is picked up
+ * automatically), and no subclass already exists. Refuses with a clear
+ * reason in every other case. Explicit opt-in via `--write-snapshot-class`;
+ * default `init` behavior is unaffected.
+ */
+export async function tryWriteSnapshotClass(
+  projectDir: string,
+): Promise<{ ok: boolean; message: string; path?: string }> {
+  let config: PhonebookConfig;
+  try {
+    const loaded = await loadConfig(projectDir);
+    config = loaded.config;
+  } catch (err) {
+    return { ok: false, message: `--write-snapshot-class: ${(err as Error).message}` };
+  }
+  if (config.platform !== 'ios') {
+    return { ok: false, message: '--write-snapshot-class only applies to iOS projects; nothing was written.' };
+  }
+  const ios = config.ios;
+  if (!ios?.scheme || (!ios.project && !ios.workspace)) {
+    return {
+      ok: false,
+      message:
+        '--write-snapshot-class: phonebook.config.json: ios.scheme and ios.project/workspace are required; ' +
+        'nothing was written.',
+    };
+  }
+
+  const projectPath = ios.project ? resolve(projectDir, ios.project) : undefined;
+  const pbxprojText = await readPbxprojText(projectDir, projectPath);
+  if (!pbxprojText.includes('SnapshotPreviews') && !pbxprojText.includes('SnapshottingTests')) {
+    return {
+      ok: false,
+      message:
+        '--write-snapshot-class: SnapshotPreviews / SnapshottingTests is not wired into the project yet — see ' +
+        'the setup steps above first; nothing was written.',
+    };
+  }
+
+  const existing = await findSnapshotTestSubclass(projectDir);
+  if (existing) {
+    return {
+      ok: false,
+      message:
+        `--write-snapshot-class: a SnapshotTest subclass already exists (${existing.className} at ` +
+        `${existing.relativePath}); nothing was written.`,
+    };
+  }
+
+  const location = findSnapshotTestClassLocation(pbxprojText);
+  if (!location) {
+    return {
+      ok: false,
+      message:
+        '--write-snapshot-class: could not identify the target that links SnapshottingTests in the .pbxproj; ' +
+        'add the SnapshotTest subclass manually (see the setup steps above). Nothing was written.',
+    };
+  }
+  if (!location.synchronizedFolder) {
+    return {
+      ok: false,
+      message:
+        `--write-snapshot-class: the "${location.targetName}" target does not use Xcode's synchronized groups, ` +
+        'so writing the file would require editing project.pbxproj — which this flag will not do. Create the ' +
+        `file and add it to the ${location.targetName} target in Xcode (File > Add Files, check the ` +
+        `${location.targetName} box). Nothing was written.`,
+    };
+  }
+
+  const targetDir = resolve(projectDir, location.synchronizedFolder);
+  const filePath = join(targetDir, 'PhonebookSnapshots.swift');
+  const contents =
+    IOS_SNAPSHOT_TEST_CLASS_SNIPPET.split('\n')
+      .map((line) => line.replace(/^ {5}/, ''))
+      .join('\n') + '\n';
+  await mkdir(targetDir, { recursive: true });
+  await writeFile(filePath, contents);
+  return {
+    ok: true,
+    path: filePath,
+    message:
+      `Wrote ${filePath}.\nSafe because the "${location.targetName}" target uses a filesystem-synchronized ` +
+      `group (${location.synchronizedFolder}/): Xcode picks up new files under it automatically, so no ` +
+      'project.pbxproj edit was needed or made.',
+  };
 }
 
 async function printAndroidInstructions(projectDir: string, modules: string[]): Promise<void> {
@@ -330,6 +435,13 @@ This project uses a Gradle version catalog ("${prefix}"). Equivalent additions u
 `;
 }
 
+/** The SnapshotTest subclass snippet printed by `init` and reused by `doctor`'s snapshot-test-class check. */
+export const IOS_SNAPSHOT_TEST_CLASS_SNIPPET = `     import SnapshotPreviews
+
+     class Snapshots: SnapshotTest {
+       override class func snapshotPreviews() -> [String]? { nil }
+     }`;
+
 function printIosInstructions(): void {
   console.log(`
 Next steps to wire up SnapshotPreviews recording:
@@ -341,11 +453,7 @@ Next steps to wire up SnapshotPreviews recording:
 
 3. Add one test class to that target:
 
-     import SnapshotPreviews
-
-     class Snapshots: SnapshotTest {
-       override class func snapshotPreviews() -> [String]? { nil }
-     }
+${IOS_SNAPSHOT_TEST_CLASS_SNIPPET}
 
 4. Recommend applying \`.sizeThatFitsLayout\` traits on component-sized previews so they
    snapshot at their natural size rather than full-screen.

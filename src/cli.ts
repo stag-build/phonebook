@@ -75,8 +75,15 @@ program
   .command('init')
   .description('Detect the platform and scaffold phonebook.config.json')
   .option('-C, --dir <dir>', 'project directory to initialize', '.')
-  .action(async (opts: { dir: string }) => {
-    await runInit(opts.dir);
+  .option(
+    '--write-snapshot-class',
+    'iOS only: write the missing SnapshotTest subclass, but only when the linking target uses Xcode ' +
+      "synchronized groups (so no project.pbxproj edit is needed) — the one exception to init's " +
+      'otherwise hands-off behavior',
+    false,
+  )
+  .action(async (opts: { dir: string; writeSnapshotClass: boolean }) => {
+    await runInit(opts.dir, { writeSnapshotClass: opts.writeSnapshotClass });
   });
 
 program

@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   collectDoctorChecks,
   extractCompilerErrors,
+  findMissingTestHostNote,
+  findSnapshotTestClassLocation,
+  findSnapshotTestSubclass,
   parseAvailableSimulatorNames,
   parseJavaMajorVersion,
   parseXcodeSchemes,
@@ -397,5 +400,264 @@ roborazzi {
     const { lines } = await collectDoctorChecks(dir);
     const line = lines.find((l) => l.includes('preview-packages'));
     expect(line).toContain('ok preview-packages');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// snapshot-test-class check (iOS)
+// ---------------------------------------------------------------------------
+
+async function writeIosProject(
+  dir: string,
+  opts: { pbxprojText?: string; sources?: Record<string, string> } = {},
+): Promise<void> {
+  await writeFile(
+    join(dir, 'phonebook.config.json'),
+    JSON.stringify(
+      { appName: 'test', platform: 'ios', ios: { project: 'App.xcodeproj', scheme: 'App' } },
+      null,
+      2,
+    ),
+  );
+  await mkdir(join(dir, 'App.xcodeproj'), { recursive: true });
+  await writeFile(
+    join(dir, 'App.xcodeproj', 'project.pbxproj'),
+    opts.pbxprojText ?? '// !$*UTF8*$!\n{ /* SnapshottingTests wired in */ }\n',
+  );
+  for (const [relPath, content] of Object.entries(opts.sources ?? {})) {
+    const full = join(dir, ...relPath.split('/'));
+    await mkdir(full.slice(0, full.lastIndexOf('/')), { recursive: true });
+    await writeFile(full, content);
+  }
+}
+
+const SNAPSHOT_TEST_CLASS_SOURCE = `import SnapshotPreviews
+
+class Snapshots: SnapshotTest {
+  override class func snapshotPreviews() -> [String]? { nil }
+}
+`;
+
+describe('collectDoctorChecks: snapshot-test-class (iOS)', () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('passes when a SnapshotTest subclass exists', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-ios-'));
+    await writeIosProject(dir, {
+      sources: { 'App/Tests/Snapshots.swift': SNAPSHOT_TEST_CLASS_SOURCE },
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('snapshot-test-class'));
+    expect(line).toContain('ok snapshot-test-class');
+    expect(line).toContain('SnapshotTest subclass found: Snapshots');
+    expect(line).toContain('App/Tests/Snapshots.swift');
+  });
+
+  it('FAILs with a setup snippet when wiring is present but no subclass exists', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-ios-'));
+    await writeIosProject(dir);
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('snapshot-test-class'));
+    expect(line).toContain('FAIL snapshot-test-class');
+    expect(line).toContain('SnapshotTest subclass');
+    expect(line).toContain('class Snapshots: SnapshotTest');
+  });
+
+  it('ignores a SnapshotTest subclass that exists only under a checkouts/ path, still FAILing', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-ios-'));
+    await writeIosProject(dir, {
+      sources: {
+        '.build/checkouts/SnapshotPreviews/Sources/SnapshotTest.swift': SNAPSHOT_TEST_CLASS_SOURCE,
+        'checkouts/OtherPkg/Sources/Snapshots.swift': SNAPSHOT_TEST_CLASS_SOURCE,
+      },
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('snapshot-test-class'));
+    expect(line).toContain('FAIL snapshot-test-class');
+    expect(line).toContain('SnapshotTest subclass');
+  });
+});
+
+describe('findSnapshotTestSubclass', () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('finds a subclass and reports its class name and relative path', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-swift-scan-'));
+    await mkdir(join(dir, 'Tests'), { recursive: true });
+    await writeFile(join(dir, 'Tests', 'Snapshots.swift'), SNAPSHOT_TEST_CLASS_SOURCE);
+
+    const result = await findSnapshotTestSubclass(dir);
+    expect(result).toEqual({ className: 'Snapshots', relativePath: join('Tests', 'Snapshots.swift') });
+  });
+
+  it('returns undefined when no subclass exists', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-swift-scan-'));
+    await mkdir(join(dir, 'Tests'), { recursive: true });
+    await writeFile(join(dir, 'Tests', 'Foo.swift'), 'struct Foo {}\n');
+
+    expect(await findSnapshotTestSubclass(dir)).toBeUndefined();
+  });
+
+  it('skips .build, DerivedData, Pods, .git, and any checkouts directory', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-swift-scan-'));
+    for (const skipped of ['.build/checkouts', 'DerivedData', 'Pods', '.git', 'Vendor/checkouts']) {
+      const full = join(dir, skipped);
+      await mkdir(full, { recursive: true });
+      await writeFile(join(full, 'Snapshots.swift'), SNAPSHOT_TEST_CLASS_SOURCE);
+    }
+
+    expect(await findSnapshotTestSubclass(dir)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findMissingTestHostNote (iOS pbxproj heuristic)
+// ---------------------------------------------------------------------------
+
+function fakePbxprojTarget(opts: { testHost?: boolean; synchronizedFolder?: string; targetName?: string }): string {
+  const targetName = opts.targetName ?? 'MyTests';
+  const testHostLine = opts.testHost ? '\t\t\t\tTEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App";\n' : '';
+  const syncGroupsLine = opts.synchronizedFolder
+    ? `\t\t\tfileSystemSynchronizedGroups = (\n\t\t\t\tFFFFFFFFFFFFFFFFFFFFFFFF /* ${opts.synchronizedFolder} */,\n\t\t\t);\n`
+    : '';
+  const syncGroupSection = opts.synchronizedFolder
+    ? `
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+\t\tFFFFFFFFFFFFFFFFFFFFFFFF /* ${opts.synchronizedFolder} */ = {
+\t\t\tisa = PBXFileSystemSynchronizedRootGroup;
+\t\t\tpath = ${opts.synchronizedFolder};
+\t\t\tsourceTree = "<group>";
+\t\t};
+/* End PBXFileSystemSynchronizedRootGroup section */
+`
+    : '';
+  return `// !$*UTF8*$!
+{
+\t\tAAAAAAAAAAAAAAAAAAAAAAAA /* ${targetName} */ = {
+\t\t\tisa = PBXNativeTarget;
+\t\t\tbuildConfigurationList = BBBBBBBBBBBBBBBBBBBBBBBB /* Build configuration list for PBXNativeTarget "${targetName}" */;
+\t\t\tname = ${targetName};
+${syncGroupsLine}\t\t\tpackageProductDependencies = (
+\t\t\t\tCCCCCCCCCCCCCCCCCCCCCCCC /* SnapshottingTests */,
+\t\t\t);
+\t\t};
+\t\tBBBBBBBBBBBBBBBBBBBBBBBB /* Build configuration list for PBXNativeTarget "${targetName}" */ = {
+\t\t\tisa = XCConfigurationList;
+\t\t\tbuildConfigurations = (
+\t\t\t\tDDDDDDDDDDDDDDDDDDDDDDDD /* Debug */,
+\t\t\t\tEEEEEEEEEEEEEEEEEEEEEEEE /* Release */,
+\t\t\t);
+\t\t};
+\t\tDDDDDDDDDDDDDDDDDDDDDDDD /* Debug */ = {
+\t\t\tisa = XCBuildConfiguration;
+\t\t\tbuildSettings = {
+${testHostLine}\t\t\t\tPRODUCT_NAME = ${targetName};
+\t\t\t};
+\t\t\tname = Debug;
+\t\t};
+\t\tEEEEEEEEEEEEEEEEEEEEEEEE /* Release */ = {
+\t\t\tisa = XCBuildConfiguration;
+\t\t\tbuildSettings = {
+\t\t\t\tPRODUCT_NAME = ${targetName};
+\t\t\t};
+\t\t\tname = Release;
+\t\t};
+${syncGroupSection}}
+`;
+}
+
+describe('findMissingTestHostNote', () => {
+  it('returns undefined when SnapshottingTests is not referenced at all', () => {
+    expect(findMissingTestHostNote('// !$*UTF8*$!\n{ /* nothing here */ }\n')).toBeUndefined();
+  });
+
+  it('notes a missing TEST_HOST when the target linking SnapshottingTests has none in any build configuration', () => {
+    const note = findMissingTestHostNote(fakePbxprojTarget({ testHost: false }));
+    expect(note).toContain('no TEST_HOST');
+    expect(note).toContain('hosted in the app');
+  });
+
+  it('is silent when the target linking SnapshottingTests has a TEST_HOST in at least one build configuration', () => {
+    expect(findMissingTestHostNote(fakePbxprojTarget({ testHost: true }))).toBeUndefined();
+  });
+});
+
+describe('findSnapshotTestClassLocation', () => {
+  it('returns undefined when the SnapshottingTests-linking target cannot be identified', () => {
+    expect(findSnapshotTestClassLocation('// !$*UTF8*$!\n{ /* nothing here */ }\n')).toBeUndefined();
+  });
+
+  it('resolves the synchronized-group folder for a project using filesystem-synchronized groups', () => {
+    const location = findSnapshotTestClassLocation(fakePbxprojTarget({ synchronizedFolder: 'UnitTests' }));
+    expect(location).toEqual({ targetName: 'MyTests', synchronizedFolder: 'UnitTests' });
+  });
+
+  it('identifies the target name with no synchronizedFolder when the project has no synchronized groups', () => {
+    const location = findSnapshotTestClassLocation(fakePbxprojTarget({}));
+    expect(location).toEqual({ targetName: 'MyTests', synchronizedFolder: undefined });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// snapshot-test-class FAIL message: location-aware wording
+// ---------------------------------------------------------------------------
+
+describe('collectDoctorChecks: snapshot-test-class location-aware FAIL message', () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('names the synchronized-group folder and mentions --write-snapshot-class when the project uses one', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-ios-'));
+    await writeIosProject(dir, {
+      pbxprojText: fakePbxprojTarget({ targetName: 'UnitTests', synchronizedFolder: 'UnitTests' }),
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('snapshot-test-class'));
+    expect(line).toContain('FAIL snapshot-test-class');
+    expect(line).toContain('Add the file UnitTests/PhonebookSnapshots.swift');
+    expect(line).toContain('synchronized groups');
+    expect(line).toContain('phonebook init --write-snapshot-class');
+    expect(line).toContain('class Snapshots: SnapshotTest');
+  });
+
+  it('uses the Xcode-add-files wording and does not mention the flag when there is no synchronized group', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-ios-'));
+    await writeIosProject(dir, {
+      pbxprojText: fakePbxprojTarget({ targetName: 'MyTests' }),
+    });
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('snapshot-test-class'));
+    expect(line).toContain('FAIL snapshot-test-class');
+    expect(line).toContain('add it to the MyTests target in Xcode');
+    expect(line).toContain('File > Add Files');
+    expect(line).not.toContain('--write-snapshot-class');
+    expect(line).toContain('class Snapshots: SnapshotTest');
+  });
+
+  it('falls back to the generic wording when the linking target cannot be identified', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-ios-'));
+    await writeIosProject(dir); // default pbxprojText has no PBXNativeTarget structure at all
+
+    const { lines } = await collectDoctorChecks(dir);
+    const line = lines.find((l) => l.includes('snapshot-test-class'));
+    expect(line).toContain('FAIL snapshot-test-class');
+    expect(line).toContain('Add to your test target');
+    expect(line).not.toContain('--write-snapshot-class');
   });
 });
