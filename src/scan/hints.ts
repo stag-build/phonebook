@@ -22,6 +22,9 @@ export interface PreviewHintInput {
   functionName: string;
   displayName?: string;
   annotationText: string;
+  /** Text of the preview function's body (from the opening brace, capped to ~20 lines).
+   * Android-only for now; used by the `size-in-body` rule. */
+  bodyText?: string;
 }
 
 interface Dims {
@@ -76,7 +79,8 @@ const ANDROID_RULES: HintRule[] = [
     declared: (ctx) => androidDeclaresLandscape(ctx.annotationText),
     message: (ctx) =>
       `"${ctx.matchedName}" implies landscape orientation, but the @Preview annotation doesn't declare a landscape device/orientation.`,
-    suggestion: () => 'device = "spec:width=891dp,height=411dp,orientation=landscape"',
+    suggestion: () =>
+      'on the @Preview annotation: device = "spec:width=891dp,height=411dp,orientation=landscape"',
   },
   {
     rule: 'orientation-portrait',
@@ -85,7 +89,8 @@ const ANDROID_RULES: HintRule[] = [
     declared: (ctx) => !androidDeclaresLandscape(ctx.annotationText),
     message: (ctx) =>
       `"${ctx.matchedName}" implies portrait orientation, but the @Preview annotation declares a landscape device.`,
-    suggestion: () => 'device = "spec:width=411dp,height=891dp,orientation=portrait"',
+    suggestion: () =>
+      'on the @Preview annotation: device = "spec:width=411dp,height=891dp,orientation=portrait"',
   },
   {
     rule: 'theme-dark',
@@ -115,8 +120,8 @@ const ANDROID_RULES: HintRule[] = [
       `"${ctx.matchedName}" implies a tablet/foldable/expanded device, but the @Preview annotation doesn't set device.`,
     suggestion: (ctx) =>
       /foldable/i.test(ctx.matchedName)
-        ? 'device = "spec:width=673dp,height=841dp" (unfolded foldable spec)'
-        : 'device = Devices.TABLET',
+        ? 'on the @Preview annotation: device = "spec:width=673dp,height=841dp" (unfolded foldable spec)'
+        : 'on the @Preview annotation: device = Devices.TABLET',
   },
   {
     rule: 'locale-rtl',
@@ -143,9 +148,145 @@ const ANDROID_RULES: HintRule[] = [
     declared: (ctx) => /widthDp\s*=/.test(ctx.annotationText) || /device\s*=/.test(ctx.annotationText),
     message: (ctx) =>
       `"${ctx.matchedName}" implies a compact/small-screen size, but the @Preview annotation doesn't set widthDp or device.`,
-    suggestion: () => 'widthDp = 320',
+    suggestion: () => 'on the @Preview annotation: widthDp = 320',
   },
 ];
+
+/** Matches a fixed-size Modifier call (e.g. `.size(width = 891.dp, height = 411.dp)`) with
+ * a simple, non-nested argument list — the shape these calls take in practice. A call whose
+ * argument contains its own parens (e.g. `.size(dimensionResource(R.dimen.x))`) deliberately
+ * doesn't match: we have no literal dp value to reason about, so there's nothing to report. */
+const SIZE_MODIFIER_RE =
+  /\.(size|requiredSize|width|height|requiredWidth|requiredHeight)\s*\(([^()]*)\)/g;
+
+interface ParsedBodySize {
+  modifiers: string[];
+  width?: number;
+  height?: number;
+}
+
+/** Scans (a segment of) a preview body for fixed-size Modifier calls and, where parseable, the
+ * dp values they set. Handles `.size(48.dp)`, `.size(300.dp, 200.dp)`,
+ * `.size(width = 891.dp, height = 411.dp)`, and separate `.width(...)`/`.height(...)` calls. */
+function parseBodySize(text: string): ParsedBodySize | undefined {
+  const modifiers: string[] = [];
+  let width: number | undefined;
+  let height: number | undefined;
+
+  for (const match of text.matchAll(SIZE_MODIFIER_RE)) {
+    const mod = match[1];
+    const args = match[2];
+    modifiers.push(mod);
+
+    const widthArg = args.match(/width\s*=\s*(\d+(?:\.\d+)?)\.dp/i);
+    const heightArg = args.match(/height\s*=\s*(\d+(?:\.\d+)?)\.dp/i);
+    const dpValues = [...args.matchAll(/(\d+(?:\.\d+)?)\.dp/g)].map((m) => Number(m[1]));
+
+    if (mod === 'size' || mod === 'requiredSize') {
+      if (widthArg) width = Number(widthArg[1]);
+      if (heightArg) height = Number(heightArg[1]);
+      if (!widthArg && !heightArg) {
+        if (dpValues.length === 1) {
+          width = dpValues[0];
+          height = dpValues[0];
+        } else if (dpValues.length >= 2) {
+          width = dpValues[0];
+          height = dpValues[1];
+        }
+      }
+    } else if (mod === 'width' || mod === 'requiredWidth') {
+      if (dpValues.length >= 1) width = dpValues[0];
+    } else if (mod === 'height' || mod === 'requiredHeight') {
+      if (dpValues.length >= 1) height = dpValues[0];
+    }
+  }
+
+  if (modifiers.length === 0) return undefined;
+  return { modifiers, width, height };
+}
+
+function androidDeclaresExplicitSize(annotationText: string): boolean {
+  return (
+    /widthDp\s*=/.test(annotationText) ||
+    /heightDp\s*=/.test(annotationText) ||
+    /device\s*=/.test(annotationText)
+  );
+}
+
+/**
+ * The default Compose preview canvas (a Pixel-ish phone) when no widthDp/heightDp/device
+ * is declared: 392dp wide, 892dp tall. A size set on the root composable only causes visible
+ * harm (clipping) when it exceeds these — an icon's `.size(40.dp)` is completely harmless.
+ */
+const DEFAULT_CANVAS_WIDTH_DP = 392;
+const DEFAULT_CANVAS_HEIGHT_DP = 892;
+
+/**
+ * Isolates the modifier chain of the preview body's ROOT composable call: the text from the
+ * start of the body up to the first `{` that opens that root call's content lambda. Nested
+ * composables (anything inside that lambda) are deliberately excluded — almost every preview
+ * body has *some* inner `.size(...)` (an icon, a row height, ...), and those never affect the
+ * canvas, so scanning the whole body would be all noise. A simple line/brace-position
+ * approximation, not a real parser: robust enough for the common `Root(modifier = ...) { ... }`
+ * shape, and for a bare `Root(...)` call with no trailing lambda (root segment == whole body).
+ */
+function rootComposableSegment(bodyText: string): string {
+  // bodyText always starts with the function's own opening brace (see captureBodyText).
+  const searchStart = 1;
+  const lambdaOpen = bodyText.indexOf('{', searchStart);
+  return lambdaOpen === -1 ? bodyText.slice(searchStart) : bodyText.slice(searchStart, lambdaOpen);
+}
+
+/**
+ * `size-in-body`: the preview body's ROOT composable sets a fixed size via a Modifier
+ * (`.size`/`.requiredSize`/`.width`/`.height`/`.requiredWidth`/`.requiredHeight`) that exceeds
+ * the default preview canvas (392dp wide / 892dp tall), while the annotation declares no canvas
+ * size of its own -- so the content is clipped instead of resized. This is a distinct mistake
+ * from `orientation-landscape`/`device-tablet`/`size-compact` (which key off the preview's
+ * *name*): here the body itself proves the mistake, regardless of naming. Both may fire together
+ * on the same preview -- a landscape-named preview that also over-sizes itself via Modifier is
+ * doubly wrong -- but their messages don't contradict: this rule only ever talks about the root
+ * Modifier size exceeding the canvas, never about orientation/name.
+ *
+ * Requires a literal, parseable dp value that actually exceeds the canvas: an in-bounds size
+ * (an icon's `.size(40.dp)`, a row's `.width(360.dp)`) or an unparseable expression (a
+ * dimension resource, a variable) never fires. No evidence, no warning.
+ */
+function checkSizeInBody(annotationText: string, bodyText: string | undefined): PreviewHint | undefined {
+  if (!bodyText) return undefined;
+  if (androidDeclaresExplicitSize(annotationText)) return undefined;
+
+  const parsed = parseBodySize(rootComposableSegment(bodyText));
+  if (!parsed) return undefined;
+  const { width, height } = parsed;
+  if (width === undefined && height === undefined) return undefined;
+
+  const widthExceeds = width !== undefined && width > DEFAULT_CANVAS_WIDTH_DP;
+  const heightExceeds = height !== undefined && height > DEFAULT_CANVAS_HEIGHT_DP;
+  if (!widthExceeds && !heightExceeds) return undefined;
+
+  const reasons: string[] = [];
+  if (widthExceeds) {
+    reasons.push(`${width}dp of width, but the preview canvas is only ${DEFAULT_CANVAS_WIDTH_DP}dp wide`);
+  }
+  if (heightExceeds) {
+    reasons.push(`${height}dp of height, but the preview canvas is only ${DEFAULT_CANVAS_HEIGHT_DP}dp tall`);
+  }
+
+  const suggestedParts: string[] = [];
+  if (width !== undefined) suggestedParts.push(`widthDp = ${width}`);
+  if (height !== undefined) suggestedParts.push(`heightDp = ${height}`);
+
+  return {
+    rule: 'size-in-body',
+    severity: 'warning',
+    message:
+      `The preview body's root composable requests ${reasons.join(' and ')}, so it is clipped ` +
+      `instead of resized. A size Modifier in the preview body sizes content inside the canvas -- ` +
+      `it does not resize the canvas itself.`,
+    suggestion: `on the @Preview annotation: @Preview(${suggestedParts.join(', ')})`,
+  };
+}
 
 const IOS_RULES: HintRule[] = [
   {
@@ -253,9 +394,14 @@ function evalRules(rules: HintRule[], functionName: string, displayName: string 
 }
 
 export function previewHints(input: PreviewHintInput): PreviewHint[] {
-  const { platform, functionName, displayName, annotationText } = input;
+  const { platform, functionName, displayName, annotationText, bodyText } = input;
   const rules = platform === 'android' ? ANDROID_RULES : IOS_RULES;
   const hints = evalRules(rules, functionName, displayName, annotationText);
+
+  if (platform === 'android') {
+    const sizeHint = checkSizeInBody(annotationText, bodyText);
+    if (sizeHint) hints.push(sizeHint);
+  }
 
   if (!displayName) {
     const example = platform === 'android' ? '@Preview(name = "<Component>/<State>")' : '#Preview("<Component>/<State>")';

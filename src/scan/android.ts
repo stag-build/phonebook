@@ -44,6 +44,8 @@ interface RawFunction {
   line: number;
   /** Text of the annotation block (all annotations) immediately above `fun`. */
   annotations: string;
+  /** Index into the file content where the `fun` keyword starts. */
+  funIndex: number;
 }
 
 function scanKotlinFile(
@@ -77,11 +79,13 @@ function scanKotlinFile(
       if (/(Dark|Night)$/.test(fn.name)) dark = true;
 
       const annotationText = previewMatches.map((m) => m[0]).join('\n');
+      const bodyText = captureBodyText(content, fn.funIndex);
       const hints = previewHints({
         platform: 'android',
         functionName: fn.name,
         displayName,
         annotationText,
+        bodyText,
       });
 
       previewComposables.push({
@@ -93,6 +97,7 @@ function scanKotlinFile(
           line: fn.line,
           dark,
           annotationText,
+          ...(bodyText ? { bodyText } : {}),
           ...(hints.length > 0 ? { hints } : {}),
         },
       });
@@ -157,7 +162,7 @@ function findAnnotatedFunctions(content: string): RawFunction[] {
     const contextLines = linesBefore.slice(Math.max(0, linesBefore.length - 6));
     const annotations = contextLines.join('\n');
 
-    results.push({ name, line, annotations });
+    results.push({ name, line, annotations, funIndex });
   }
   return results;
 }
@@ -168,6 +173,17 @@ function lineNumberAt(content: string, index: number): number {
     if (content[i] === '\n') line++;
   }
   return line;
+}
+
+const BODY_LINE_CAP = 20;
+
+/** Captures the preview function's body from its opening brace, capped to ~20 lines.
+ * A simple line cap (no brace matching) -- good enough for hints to pattern-match against. */
+function captureBodyText(content: string, funIndex: number): string | undefined {
+  const braceIndex = content.indexOf('{', funIndex);
+  if (braceIndex === -1) return undefined;
+  const lines = content.slice(braceIndex).split('\n').slice(0, BODY_LINE_CAP);
+  return lines.join('\n');
 }
 
 /**

@@ -205,6 +205,112 @@ describe('previewHints: android', () => {
     expect(hint?.suggestion).toContain('@Preview(name =');
   });
 
+  it('size-in-body: fires on the real-world LoginContentLandscape mistake (Modifier.size in body, no annotation size)', () => {
+    const hints = previewHints({
+      platform: 'android',
+      functionName: 'LoginContentLandscapePreview',
+      annotationText: '@Preview(name = "LoginContent/Landscape")',
+      bodyText:
+        '{\n' +
+        '    Box(modifier = Modifier.size(width = 891.dp, height = 411.dp)) {\n' +
+        '        LoginContentLandscape()\n' +
+        '    }\n' +
+        '}',
+    });
+    const hint = hints.find((h) => h.rule === 'size-in-body');
+    expect(hint).toBeDefined();
+    expect(hint?.severity).toBe('warning');
+    expect(hint?.message).toContain('891dp of width');
+    expect(hint?.message).toContain('392dp wide');
+    expect(hint?.suggestion).toContain('widthDp = 891');
+    expect(hint?.suggestion).toContain('heightDp = 411');
+  });
+
+  it('size-in-body: suppressed when the annotation already declares widthDp/heightDp', () => {
+    const hints = previewHints({
+      platform: 'android',
+      functionName: 'LoginContentLandscapePreview',
+      annotationText: '@Preview(widthDp = 891, heightDp = 411)',
+      bodyText: '{\n' +
+        '    Box(modifier = Modifier.size(width = 891.dp, height = 411.dp)) {\n' +
+        '        LoginContentLandscape()\n' +
+        '    }\n' +
+        '}',
+    });
+    expect(ruleNames(hints)).not.toContain('size-in-body');
+  });
+
+  it('size-in-body: suppressed when the annotation declares device =', () => {
+    const hints = previewHints({
+      platform: 'android',
+      functionName: 'LoginContentLandscapePreview',
+      annotationText: '@Preview(device = "spec:width=891dp,height=411dp,orientation=landscape")',
+      bodyText: '{\n' +
+        '    Box(modifier = Modifier.size(width = 891.dp, height = 411.dp)) {\n' +
+        '        LoginContentLandscape()\n' +
+        '    }\n' +
+        '}',
+    });
+    expect(ruleNames(hints)).not.toContain('size-in-body');
+  });
+
+  it('size-in-body: does not fire for a body with only .padding(16.dp), no size modifier', () => {
+    const hints = previewHints({
+      platform: 'android',
+      functionName: 'CardPreview',
+      annotationText: '@Preview',
+      bodyText: '{\n' +
+        '    Box(modifier = Modifier.padding(16.dp)) {\n' +
+        '        Card()\n' +
+        '    }\n' +
+        '}',
+    });
+    expect(ruleNames(hints)).not.toContain('size-in-body');
+  });
+
+  it('size-in-body: does not fire for an inner .size(40.dp) nested under the root composable', () => {
+    const hints = previewHints({
+      platform: 'android',
+      functionName: 'LoginContentPreview',
+      annotationText: '@Preview',
+      bodyText: '{\n' +
+        '    Column(modifier = Modifier.padding(16.dp)) {\n' +
+        '        Icon(modifier = Modifier.size(40.dp), imageVector = Icons.Default.Person, contentDescription = null)\n' +
+        '        Text("Login")\n' +
+        '    }\n' +
+        '}',
+    });
+    expect(ruleNames(hints)).not.toContain('size-in-body');
+  });
+
+  it('size-in-body: does not fire when the root composable\'s size fits the canvas (width = 360.dp)', () => {
+    const hints = previewHints({
+      platform: 'android',
+      functionName: 'AlbumGridPreview',
+      annotationText: '@Preview',
+      bodyText: '{\n' +
+        '    Box(modifier = Modifier.width(360.dp)) {\n' +
+        '        AlbumGrid()\n' +
+        '    }\n' +
+        '}',
+    });
+    expect(ruleNames(hints)).not.toContain('size-in-body');
+  });
+
+  it('size-in-body: does not fire for an unparseable size expression on the root composable', () => {
+    const hints = previewHints({
+      platform: 'android',
+      functionName: 'TopBarPreview',
+      annotationText: '@Preview',
+      bodyText: '{\n' +
+        '    Box(modifier = Modifier.size(dimensionResource(R.dimen.top_bar_height))) {\n' +
+        '        TopBar()\n' +
+        '    }\n' +
+        '}',
+    });
+    expect(ruleNames(hints)).not.toContain('size-in-body');
+  });
+
   it('unnamed-preview: suppressed when a displayName is present', () => {
     const hints = previewHints({
       platform: 'android',

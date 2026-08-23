@@ -20,6 +20,10 @@ export interface ScannedPreview {
   /** Raw annotation/macro text as written in source (Android: @Preview(...) annotations
    * joined; iOS: the #Preview(...) line plus the following lines of its body, capped). */
   annotationText?: string;
+  /** Text of the preview function's body (from the opening brace, capped to ~20 lines).
+   * Lets hints inspect what the composable actually does, e.g. a fixed-size Modifier
+   * that can't substitute for an annotation-level canvas size. */
+  bodyText?: string;
   /** Configuration hints: cases where the preview's name implies a trait its
    * annotation doesn't declare. See src/scan/hints.ts. */
   hints?: PreviewHint[];

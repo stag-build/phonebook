@@ -86,7 +86,11 @@ const NAMING_GUIDANCE = `Naming convention (see docs/naming-convention.md):
 Component names are camel-case-spaced ("UserCard" -> "User Card", acronym runs kept together: "URLBar" -> "URL Bar").
 Dark mode: Android infers "Dark" state from uiMode = UI_MODE_NIGHT_YES and strips a trailing Dark/Night suffix from the function name; iOS has no such inference, so give the preview an explicit "Component/Dark" name and add .preferredColorScheme(.dark).
 
-Configuration hints: analyze_coverage also flags previews whose name implies a configuration (landscape, dark, tablet, RTL, large font, ...) that the annotation doesn't actually declare — e.g. a function named "...Landscape" with a plain @Preview() renders portrait. Fix by adding the declared trait the hint suggests (device/orientation spec, uiMode, locale, fontScale, traits: for iOS, etc.), or renaming if the config was never intended.`;
+Configuration hints: analyze_coverage also flags previews whose name implies a configuration (landscape, dark, tablet, RTL, large font, ...) that the annotation doesn't actually declare — e.g. a function named "...Landscape" with a plain @Preview() renders portrait. Fix by adding the declared trait the hint suggests (device/orientation spec, uiMode, locale, fontScale, traits: for iOS, etc.), or renaming if the config was never intended.
+
+Canvas size (Android): preview dimensions come only from the @Preview annotation — widthDp/heightDp or device = "spec:width=..dp,height=..dp,...". Wrapping the composable in Modifier.size(...)/width(...)/height(...) in the preview body does NOT resize the canvas: the content is sized inside a canvas that stays the default phone size, so wide or large content is clipped, not fit. Correct: @Preview(widthDp = 891, heightDp = 411) fun ... { LoginContentLandscape() } — no size Modifier needed.
+
+Canvas size (iOS): preview dimensions come from traits: (e.g. .fixedLayout(width:height:)) or .previewDevice on the #Preview, not from a frame modifier in the view body.`;
 
 function androidTemplate(component: string, states: string[]): string {
   const name = component || 'Component';
@@ -255,12 +259,17 @@ export async function runMcpServer(): Promise<void> {
       description: 'Build the static gallery site from a bundle, same as `phonebook build <bundle>`.',
       inputSchema: {
         bundle: z.string().describe('Bundle directory produced by run_generate / `phonebook generate`'),
-        output: z.string().default('phonebook-site').describe('Site output directory'),
+        output: z
+          .string()
+          .optional()
+          .describe('Site output directory (default: the bundle directory itself, reusing its images)'),
       },
     },
     async ({ bundle, output }) => {
       try {
-        const outDir = resolve(output);
+        // Default to building in place so the site reuses the bundle's images
+        // instead of duplicating every screenshot into a sibling directory.
+        const outDir = output ? resolve(output) : resolve(bundle);
         const count = await buildSite(resolve(bundle), outDir);
         return textResult(`Built gallery with ${count} screenshots -> ${outDir}/index.html`);
       } catch (err) {

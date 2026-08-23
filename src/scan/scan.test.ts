@@ -271,6 +271,13 @@ fun ShouldBeIgnored() {}
     const report = await scanAndroid(projectDir, [':app']);
     expect(report.stats.hintCount).toBeGreaterThan(0);
   });
+
+  it('captures the preview function body text', async () => {
+    const report = await scanAndroid(projectDir, [':app']);
+    const splash = report.components.find((c) => c.name === 'SplashContentLandscape');
+    const preview = splash?.previews.find((p) => p.name === 'SplashContentLandscape');
+    expect(preview?.bodyText).toContain('Text("splash")');
+  });
 });
 
 describe('scanIos', () => {
