@@ -32,7 +32,7 @@ A gallery generated from `samples/ios` — `component / state` cards grouped fro
    - iOS: [SnapshotPreviews](https://github.com/getsentry/SnapshotPreviews), run via `xcodebuild test` on a simulator. Requires macOS.
 2. `phonebook build` turns that bundle into a static site — by default it writes `index.html` directly into the bundle directory (reusing the images already there, no copying), so the site lands at `<bundle>/index.html`. Pass `-o <dir>` to instead copy everything into a standalone site directory (for publishing elsewhere, or later merging multiple bundles). Plain HTML/CSS/JS, works from `file://` or any static host.
 
-Install with `npm install -g @stag-build/phonebook`, or run without installing via `npx @stag-build/phonebook <cmd>`.
+Install with `npm install -g @stag-build/phonebook`, `brew install stag-build/phonebook/phonebook`, or run without installing via `npx @stag-build/phonebook <cmd>`.
 
 ## Using it with a coding agent (recommended)
 
