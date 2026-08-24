@@ -21,6 +21,10 @@ Phonebook turns screenshots your team already has into a Storybook-style compone
 
 ## Demo
 
+<video src="docs/phonebook-promo.mp4" controls poster="docs/demo.png" width="100%"></video>
+
+[Watch the Phonebook promo video](docs/phonebook-promo.mp4)
+
 ![Phonebook gallery screenshot](https://raw.githubusercontent.com/stag-build/phonebook/main/docs/demo.png)
 
 A gallery generated from `samples/ios` — `component / state` cards grouped from the app's own `#Preview`s, no extra annotation.
