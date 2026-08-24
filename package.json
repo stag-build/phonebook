@@ -4,12 +4,34 @@
   "description": "Storybook-style static gallery generated from Compose @Preview / SwiftUI #Preview screenshots",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stag-build/phonebook.git"
+  },
+  "homepage": "https://github.com/stag-build/phonebook#readme",
+  "bugs": {
+    "url": "https://github.com/stag-build/phonebook/issues"
+  },
+  "keywords": [
+    "storybook",
+    "compose",
+    "jetpack-compose",
+    "swiftui",
+    "preview",
+    "screenshot",
+    "gallery",
+    "mcp",
+    "roborazzi"
+  ],
   "bin": {
     "phonebook": "dist/cli.js"
   },
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20"
   },
