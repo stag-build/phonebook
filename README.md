@@ -99,41 +99,44 @@ Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
 </details>
 
 <details>
-<summary><strong>VS Code</strong></summary>
+<summary><strong>Xcode (Codex Agent)</strong> — Xcode 26.3+</summary>
 
-Add to `.vscode/mcp.json`:
+Add to `.codex/config.toml` at your project's workspace root. Xcode's agent runs with a minimal `PATH`, so the command wraps `npx` in a shell that adds the usual Homebrew/nvm locations first:
 
-```json
-{
-  "servers": {
-    "phonebook": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
-    }
-  }
-}
+```toml
+[mcp_servers.phonebook]
+command = "/bin/zsh"
+args = [
+  "-lc",
+  "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; npx tsx /path/to/phonebook/src/cli.ts mcp"
+]
+enabled = true
 ```
 
 </details>
 
 <details>
-<summary><strong>Windsurf</strong></summary>
+<summary><strong>Xcode (Claude Code Agent)</strong> — Xcode 26.3+</summary>
 
-Add to `~/.codeium/windsurf/mcp_config.json`:
+Add the `mcpServers` block to `~/Library/Developer/Xcode/CodingAssistant/ClaudeAgentConfig/.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "phonebook": {
-      "command": "npx",
-      "args": ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
+      "command": "/bin/zsh",
+      "args": [
+        "-lc",
+        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; npx tsx /path/to/phonebook/src/cli.ts mcp"
+      ]
     }
   }
 }
 ```
 
 </details>
+
+**Android Studio (Gemini Agent Mode):** not supported yet — its MCP integration only connects to remote `httpUrl` servers, not local stdio processes like Phonebook's. Use one of the terminal-based clients above (Claude Code, Codex CLI) from the Android repo instead.
 
 In every case, replace `/path/to/phonebook` with the absolute path to this repo. Then, from a chat in your Android or iOS repo, just ask:
 
