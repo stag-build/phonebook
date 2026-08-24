@@ -135,7 +135,7 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 
 </details>
 
-In every case, replace `/path/to/phonebook` with the absolute path to this repo. Then, from a chat in your Android or iOS repo (with `phonebook.config.json` already in place — `phonebook init` scaffolds it, see the quickstarts below), just ask:
+In every case, replace `/path/to/phonebook` with the absolute path to this repo. Then, from a chat in your Android or iOS repo, just ask:
 
 > "Use the phonebook MCP and create a catalog for my designer."
 
