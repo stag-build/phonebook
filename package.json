@@ -1,6 +1,6 @@
 {
   "name": "@stag-build/phonebook",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Storybook-style static gallery generated from Compose @Preview / SwiftUI #Preview screenshots",
   "license": "MIT",
   "type": "module",
