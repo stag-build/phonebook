@@ -15,6 +15,33 @@ Each repo runs Phonebook independently. v1 is single-platform: one Android repo 
 
 Commands run via `npx tsx src/cli.ts <cmd>` for now (npm packaging as `@stag/phonebook` is pending — this repo is not yet on npm).
 
+## Using it with a coding agent (recommended)
+
+Most people won't run the CLI directly — Phonebook is built to be driven by a coding agent (Claude Code, Codex, etc.) through its MCP server. The agent adds previews, runs setup checks, and generates the gallery for you; the CLI underneath is the engine it calls.
+
+Register the server once:
+
+```sh
+claude mcp add phonebook -- npx tsx /path/to/phonebook/src/cli.ts mcp
+```
+
+For Codex CLI, add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.phonebook]
+command = "npx"
+args = ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
+```
+
+Then, from a chat in your Android or iOS repo (with `phonebook.config.json` already in place — `phonebook init` scaffolds it, see the quickstarts below), just ask:
+
+- *"Use phonebook's check_setup to see if this repo is ready for screenshot generation."* — runs the same checks as `phonebook doctor`.
+- *"Analyze preview coverage and list components missing previews or dark variants."*
+- *"Add a preview for `<Component>`, following phonebook's preview guidance, then generate and confirm the new screenshot appears."*
+- *"Build the gallery site."*
+
+The server exposes five tools: `check_setup`, `analyze_coverage`, `get_preview_guidance`, `run_generate`, `run_build`.
+
 ## Quickstart: Android
 
 Run `phonebook init` first — it detects your project's Kotlin version and prints these instructions with **library versions resolved to be compatible with it** (e.g. Kotlin 2.0 projects get Roborazzi 1.60.0; Kotlin 2.2+ gets the latest). The versions below are what a current-Kotlin project gets (see `samples/android/app/build.gradle.kts` for a full working example):
@@ -128,7 +155,7 @@ Both `generate` and `build` accept `-C <dir>` (project directory containing `pho
 
 `phonebook init --write-snapshot-class` is the one exception to init's hands-off rule: when doctor's iOS check identifies the linking target *and* that target's source folder is one of Xcode's filesystem-synchronized groups, it writes `<folder>/PhonebookSnapshots.swift` directly — safe because a synchronized folder is picked up by Xcode automatically, so no `project.pbxproj` edit is made. It refuses (with the reason) in every other case: no SnapshotPreviews wiring yet, a non-synchronized-group project, or a subclass that already exists.
 
-`phonebook mcp` runs an MCP server exposing coverage analysis, setup checks, preview guidance, and the generate/build commands to a coding agent.
+`phonebook mcp` runs the MCP server — see "Using it with a coding agent" above for setup and example prompts.
 
 ## Requirements
 
