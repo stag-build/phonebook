@@ -1,6 +1,6 @@
 <div align="center">
 
-# @stag/phonebook
+# @stag-build/phonebook
 
 <p>A self-hosted, open-source alternative to Emerge Tools Snapshots: harvest your existing Compose <code>@Preview</code>s and SwiftUI <code>#Preview</code>s into a browsable, static HTML gallery — no SaaS account required.</p>
 
@@ -32,19 +32,19 @@ Phonebook turns screenshots your team already has into a Storybook-style compone
    - iOS: [SnapshotPreviews](https://github.com/getsentry/SnapshotPreviews), run via `xcodebuild test` on a simulator. Requires macOS.
 2. `phonebook build` turns that bundle into a static site — by default it writes `index.html` directly into the bundle directory (reusing the images already there, no copying), so the site lands at `<bundle>/index.html`. Pass `-o <dir>` to instead copy everything into a standalone site directory (for publishing elsewhere, or later merging multiple bundles). Plain HTML/CSS/JS, works from `file://` or any static host.
 
-Commands run via `npx tsx src/cli.ts <cmd>` for now (npm packaging as `@stag/phonebook` is pending — this repo is not yet on npm).
+Install with `npm install -g @stag-build/phonebook`, or run without installing via `npx @stag-build/phonebook <cmd>`.
 
 ## Using it with a coding agent (recommended)
 
 Most people won't run the CLI directly — Phonebook is built to be driven by a coding agent (Claude Code, Codex, etc.) through its MCP server. The agent adds previews, runs setup checks, and generates the gallery for you; the CLI underneath is the engine it calls.
 
-The server runs via `npx tsx /path/to/phonebook/src/cli.ts mcp` — no separate install step (npm packaging is pending, see above). Pick your client below.
+The server runs via `npx @stag-build/phonebook mcp` — no install step needed. Pick your client below.
 
 <details>
 <summary><strong>Claude Code</strong></summary>
 
 ```sh
-claude mcp add phonebook -- npx tsx /path/to/phonebook/src/cli.ts mcp
+claude mcp add phonebook -- npx -y @stag-build/phonebook mcp
 ```
 
 </details>
@@ -57,7 +57,7 @@ Add to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.phonebook]
 command = "npx"
-args = ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
+args = ["-y", "@stag-build/phonebook", "mcp"]
 ```
 
 </details>
@@ -72,7 +72,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
   "mcpServers": {
     "phonebook": {
       "command": "npx",
-      "args": ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
+      "args": ["-y", "@stag-build/phonebook", "mcp"]
     }
   }
 }
@@ -90,7 +90,7 @@ Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
   "mcpServers": {
     "phonebook": {
       "command": "npx",
-      "args": ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
+      "args": ["-y", "@stag-build/phonebook", "mcp"]
     }
   }
 }
@@ -108,7 +108,7 @@ Add to `.codex/config.toml` at your project's workspace root. Xcode's agent runs
 command = "/bin/zsh"
 args = [
   "-lc",
-  "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; npx tsx /path/to/phonebook/src/cli.ts mcp"
+  "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; npx -y @stag-build/phonebook mcp"
 ]
 enabled = true
 ```
@@ -127,7 +127,7 @@ Add the `mcpServers` block to `~/Library/Developer/Xcode/CodingAssistant/ClaudeA
       "command": "/bin/zsh",
       "args": [
         "-lc",
-        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; npx tsx /path/to/phonebook/src/cli.ts mcp"
+        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; npx -y @stag-build/phonebook mcp"
       ]
     }
   }
@@ -138,7 +138,7 @@ Add the `mcpServers` block to `~/Library/Developer/Xcode/CodingAssistant/ClaudeA
 
 **Android Studio (Gemini Agent Mode):** not supported yet — its MCP integration only connects to remote `httpUrl` servers, not local stdio processes like Phonebook's. Use one of the terminal-based clients above (Claude Code, Codex CLI) from the Android repo instead.
 
-In every case, replace `/path/to/phonebook` with the absolute path to this repo. Then, from a chat in your Android or iOS repo, just ask:
+Then, from a chat in your Android or iOS repo, just ask:
 
 > "Use the phonebook MCP and create a catalog for my designer."
 
@@ -184,8 +184,8 @@ Add a `phonebook.config.json` next to `settings.gradle.kts`:
 Then, from the repo containing Phonebook:
 
 ```sh
-npx tsx src/cli.ts generate -C /path/to/your/android/repo
-npx tsx src/cli.ts build -C /path/to/your/android/repo
+npx @stag-build/phonebook generate -C /path/to/your/android/repo
+npx @stag-build/phonebook build -C /path/to/your/android/repo
 ```
 
 Open `phonebook-out/index.html`.
@@ -222,8 +222,8 @@ Add `phonebook.config.json` next to your `.xcodeproj`:
 Your scheme must build and test the snapshot test target (see `PhonebookSample.xcscheme` in the sample). Then:
 
 ```sh
-npx tsx src/cli.ts generate -C /path/to/your/ios/repo
-npx tsx src/cli.ts build -C /path/to/your/ios/repo
+npx @stag-build/phonebook generate -C /path/to/your/ios/repo
+npx @stag-build/phonebook build -C /path/to/your/ios/repo
 ```
 
 Open `phonebook-out/index.html`.

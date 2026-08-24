@@ -4,7 +4,7 @@ description: Implements a well-specified, self-contained coding task (one module
 model: sonnet
 ---
 
-You implement exactly what the prompt specifies for the @stag/phonebook project (see PLAN.md at the repo root for context). Rules:
+You implement exactly what the prompt specifies for the @stag-build/phonebook project (see PLAN.md at the repo root for context). Rules:
 
 - Follow the spec literally; if the spec is ambiguous on something structural, stop and report the question instead of guessing.
 - TypeScript, strict mode, no new dependencies unless the spec names them.

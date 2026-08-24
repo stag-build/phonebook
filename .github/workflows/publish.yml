@@ -18,9 +18,14 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
           cache: npm
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1; Node 20's bundled npm
+      # is older, so upgrade it explicitly. No NPM_TOKEN secret: npm exchanges
+      # this job's OIDC token for a short-lived publish credential, verified
+      # against the Trusted Publisher configured on the npm package settings
+      # (GitHub org/repo + this workflow filename). See
+      # https://docs.npmjs.com/trusted-publishers
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run build
       - run: npm test
       - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

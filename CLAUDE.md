@@ -1,4 +1,4 @@
-# @stag/phonebook
+# @stag-build/phonebook
 
 Static Storybook-style gallery generated from Compose `@Preview` / SwiftUI `#Preview` screenshots. See PLAN.md for the full plan.
 

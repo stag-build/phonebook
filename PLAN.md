@@ -10,7 +10,7 @@ Storybook for native mobile: harvest existing Compose `@Preview`s and SwiftUI `#
 ## Core decisions (settled)
 
 1. **Grouping**: naming convention. Parse `@Preview(name="Button/Disabled")`, function names (`ButtonDisabledPreview`), and file/module location into `component / state`. No required annotation. MCP normalizes messy names by editing code.
-2. **Stack**: TypeScript, npm, published under the `@stag` scope (`phonebook` is taken on npm). One package for v1: `@stag/phonebook` — CLI, MCP subcommand, and site builder together; split into `@stag/phonebook-*` packages only if size demands it. Binary name stays `phonebook`.
+2. **Stack**: TypeScript, npm, published under the `@stag-build` scope (`phonebook` and the `stag` scope were both already taken on npm). One package for v1: `@stag-build/phonebook` — CLI, MCP subcommand, and site builder together; split into `@stag-build/phonebook-*` packages only if size demands it. Binary name stays `phonebook`.
 3. **Integration**: users (or their agent, via MCP guidance) add the platform dependencies; the CLI only orchestrates builds and harvests output. `phonebook init` scaffolds config + code snippets but never silently mutates builds.
 4. **Repos are independent, and v1 is single-platform**: Android repo and iOS repo each run Phonebook alone with their own `phonebook.config.json`. Generation emits a self-contained **bundle** (manifest + images); `build` takes exactly one bundle in v1 and produces that platform's site. The bundle format is designed so a future `build` can accept N bundles and merge (cross-platform site), but merging is post-v1.
 5. **Render matrix**: honor what each preview declares (uiMode, device, traits). One screenshot per declared preview. Missing dark-mode/state coverage is fixed by adding previews in code — that's the MCP's job, not a render matrix.
@@ -82,7 +82,7 @@ The MCP never edits files itself — the agent's own edit tools do that, guided 
 
 1. **M1 — Android vertical slice** (~core): config + `generate` via Roborazzi/CPS on a sample app + manifest + minimal grid site. Proves the whole loop.
 2. **M2 — iOS engine**: SnapshotPreviews orchestration, xcresult harvesting, same manifest. Sample SwiftUI app.
-3. **M3 — `init` + `doctor` + docs**, npm publish as `@stag/phonebook`.
+3. **M3 — `init` + `doctor` + docs**, npm publish as `@stag-build/phonebook`.
 4. **M4 — MCP server** (coverage, guidance, setup check, run).
 5. **M5 — post-v1**: search/filters, multi-bundle merge + side-by-side view, CI recipe docs, version diffing.
 
@@ -92,4 +92,4 @@ The MCP never edits files itself — the agent's own edit tools do that, guided 
 2. **SnapshotPreviews rendering gaps** (some UIKit-hosted views, environment-dependent previews fail off-device). Mitigation: per-preview failure reporting in the manifest, skip-list in config.
 3. **Robolectric fidelity** (screenshots are not pixel-identical to devices). Acceptable for a design gallery; document it.
 4. **Engine churn** (Google may mature CPST). The bundle contract isolates us — engines are adapters.
-5. **npm name**: `phonebook` is taken — publishing as `@stag/phonebook` (requires the `stag` npm org).
+5. **npm name**: `phonebook` and the `@stag` scope were both taken — publishing as `@stag-build/phonebook` instead.
