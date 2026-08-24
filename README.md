@@ -1,6 +1,6 @@
 <div align="center">
 
-# @stag-build/phonebook
+<img src="https://raw.githubusercontent.com/stag-build/phonebook/main/assets/phonebook-logo-lockup.svg" alt="Phonebook" width="360" />
 
 <p>A self-hosted, open-source alternative to Emerge Tools Snapshots: harvest your existing Compose <code>@Preview</code>s and SwiftUI <code>#Preview</code>s into a browsable, static HTML gallery — no SaaS account required.</p>
 
