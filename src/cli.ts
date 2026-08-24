@@ -47,8 +47,6 @@ program
     'site output directory (default: write index.html into the bundle directory itself, reusing its images/ with no copying)',
   )
   .action(async (bundle: string | undefined, opts: { dir: string; output?: string }) => {
-    // Running `phonebook build` with no argument in a project directory is the
-    // common case right after `generate`: fall back to that project's bundle.
     let bundleDir: string;
     if (bundle) {
       bundleDir = resolve(bundle);
@@ -62,10 +60,6 @@ program
         );
       }
     }
-    // With no -o, the site is written directly into the bundle directory —
-    // reusing the images already there instead of duplicating every
-    // screenshot. -o <dir> keeps the previous behavior (copy into a
-    // standalone site directory) for publishing elsewhere or merging bundles.
     const outDir = opts.output ? resolve(opts.output) : bundleDir;
     const count = await buildSite(bundleDir, outDir);
     console.log(`Built gallery with ${count} screenshots -> ${outDir}/index.html`);
