@@ -137,12 +137,9 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 
 In every case, replace `/path/to/phonebook` with the absolute path to this repo. Then, from a chat in your Android or iOS repo (with `phonebook.config.json` already in place — `phonebook init` scaffolds it, see the quickstarts below), just ask:
 
-- *"Use phonebook's check_setup to see if this repo is ready for screenshot generation."* — runs the same checks as `phonebook doctor`.
-- *"Analyze preview coverage and list components missing previews or dark variants."*
-- *"Add a preview for `<Component>`, following phonebook's preview guidance, then generate and confirm the new screenshot appears."*
-- *"Build the gallery site."*
+> "Use the phonebook MCP and create a catalog for my designer."
 
-The server exposes five tools: `check_setup`, `analyze_coverage`, `get_preview_guidance`, `run_generate`, `run_build`.
+The agent figures out the rest — checking setup, filling in missing previews, generating, and building the site. For more targeted asks, it also exposes: `check_setup` (setup diagnosis, same as `phonebook doctor`), `analyze_coverage` (components missing previews or dark variants), `get_preview_guidance`, `run_generate`, and `run_build`.
 
 ## Quickstart: Android
 
