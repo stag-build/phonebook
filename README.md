@@ -38,13 +38,21 @@ Commands run via `npx tsx src/cli.ts <cmd>` for now (npm packaging as `@stag/pho
 
 Most people won't run the CLI directly — Phonebook is built to be driven by a coding agent (Claude Code, Codex, etc.) through its MCP server. The agent adds previews, runs setup checks, and generates the gallery for you; the CLI underneath is the engine it calls.
 
-Register the server once:
+The server runs via `npx tsx /path/to/phonebook/src/cli.ts mcp` — no separate install step (npm packaging is pending, see above). Pick your client below.
+
+<details>
+<summary><strong>Claude Code</strong></summary>
 
 ```sh
 claude mcp add phonebook -- npx tsx /path/to/phonebook/src/cli.ts mcp
 ```
 
-For Codex CLI, add to `~/.codex/config.toml`:
+</details>
+
+<details>
+<summary><strong>Codex CLI</strong></summary>
+
+Add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.phonebook]
@@ -52,7 +60,82 @@ command = "npx"
 args = ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
 ```
 
-Then, from a chat in your Android or iOS repo (with `phonebook.config.json` already in place — `phonebook init` scaffolds it, see the quickstarts below), just ask:
+</details>
+
+<details>
+<summary><strong>Claude Desktop</strong></summary>
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "phonebook": {
+      "command": "npx",
+      "args": ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Cursor</strong></summary>
+
+Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+
+```json
+{
+  "mcpServers": {
+    "phonebook": {
+      "command": "npx",
+      "args": ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>VS Code</strong></summary>
+
+Add to `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "phonebook": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Windsurf</strong></summary>
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "phonebook": {
+      "command": "npx",
+      "args": ["tsx", "/path/to/phonebook/src/cli.ts", "mcp"]
+    }
+  }
+}
+```
+
+</details>
+
+In every case, replace `/path/to/phonebook` with the absolute path to this repo. Then, from a chat in your Android or iOS repo (with `phonebook.config.json` already in place — `phonebook init` scaffolds it, see the quickstarts below), just ask:
 
 - *"Use phonebook's check_setup to see if this repo is ready for screenshot generation."* — runs the same checks as `phonebook doctor`.
 - *"Analyze preview coverage and list components missing previews or dark variants."*
