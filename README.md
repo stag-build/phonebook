@@ -1,10 +1,29 @@
+<div align="center">
+
 # @stag/phonebook
 
-Static, Storybook-style component gallery generated from screenshots your team already has: Compose `@Preview`s and SwiftUI `#Preview`s. No new test code, no design tokens to maintain by hand — Phonebook renders what's already in your codebase into a browsable HTML site designers can open without installing anything.
+<p>A self-hosted, open-source alternative to Emerge Tools Snapshots: harvest your existing Compose <code>@Preview</code>s and SwiftUI <code>#Preview</code>s into a browsable, static HTML gallery — no SaaS account required.</p>
 
-Think of it as the open-source, self-hosted alternative to Emerge Tools Snapshots' gallery: same idea (harvest previews, publish a static site), no SaaS account required.
+![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
 
-Each repo runs Phonebook independently. v1 is single-platform: one Android repo (or one iOS repo) produces one bundle, and `phonebook build` turns that bundle into one site.
+</div>
+
+Phonebook turns screenshots your team already has into a Storybook-style component gallery. No new test code, no design tokens to maintain by hand — it renders what's already in your codebase into a static site designers can open without installing anything. Each repo runs Phonebook independently; v1 is single-platform, so one Android repo (or one iOS repo) produces one bundle and one site.
+
+## Features
+
+- **Zero new test code** — reuses `@Preview` / `#Preview` you've already written
+- **No SaaS account** — self-hosted, runs entirely in your CI or locally
+- **MCP-first** — a coding agent can check setup, analyze coverage, add missing previews, and build the gallery for you
+- **Smart component grouping** — `component / state` cards inferred from preview names, no required annotation
+- **Cross-platform** — Android (Roborazzi + ComposablePreviewScanner, runs on the JVM, no emulator) and iOS (SnapshotPreviews, runs on a simulator)
+- **Version-aware setup** — `init`/`doctor` resolve library versions against your project's Kotlin version and catch Kotlin/Roborazzi metadata mismatches before they cause opaque compiler crashes
+
+## Demo
+
+![Phonebook gallery screenshot](docs/demo.png)
+
+*(replace with an actual screenshot of a generated gallery)*
 
 ## How it works
 
@@ -130,7 +149,9 @@ Open `phonebook-out/index.html`.
 
 Phonebook groups screenshots into `component / state` cards from your existing preview names — no required annotation. See [docs/naming-convention.md](docs/naming-convention.md) for the full rules and examples.
 
-## Config reference (`phonebook.config.json`)
+## Configuration
+
+`phonebook.config.json`:
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
@@ -164,3 +185,16 @@ Both `generate` and `build` accept `-C <dir>` (project directory containing `pho
 **iOS**: macOS with Xcode installed, plus a booted or bootable simulator (`generate` runs `xcodebuild test` against a named simulator destination). Requires a macOS runner in CI.
 
 See [docs/ci.md](docs/ci.md) for CI recipes and [docs/naming-convention.md](docs/naming-convention.md) for the naming rules.
+
+## Roadmap
+
+Post-v1 (M5), not yet built:
+
+- [ ] Search and filters in the generated gallery
+- [ ] Multi-bundle merge with a side-by-side view (cross-platform sites)
+- [ ] Version diffing between two runs (the manifest already carries commit + image hashes to enable this)
+- [ ] Additional CI recipe docs
+
+## License
+
+MIT — see [LICENSE](LICENSE).
