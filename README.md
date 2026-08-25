@@ -21,9 +21,7 @@ Phonebook turns screenshots your team already has into a Storybook-style compone
 
 ## Demo
 
-<video src="docs/phonebook-promo.mp4" controls poster="docs/demo.png" width="100%"></video>
-
-[Watch the Phonebook promo video](docs/phonebook-promo.mp4)
+[![Watch the Phonebook promo video](https://img.youtube.com/vi/trHbUaG784w/maxresdefault.jpg)](https://youtu.be/trHbUaG784w)
 
 ![Phonebook gallery screenshot](https://raw.githubusercontent.com/stag-build/phonebook/main/docs/demo.png)
 
