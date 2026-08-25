@@ -29,6 +29,8 @@ Phonebook turns screenshots your team already has into a Storybook-style compone
 
 A gallery generated from `samples/ios` — `component / state` cards grouped from the app's own `#Preview`s, no extra annotation.
 
+**[Browse the live gallery →](https://stag-build.github.io/phonebook/)**
+
 ## How it works
 
 1. `phonebook generate` runs your platform's preview-rendering engine and harvests the output into a **bundle** (`manifest.json` + `images/`).
