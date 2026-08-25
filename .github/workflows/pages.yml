@@ -31,6 +31,13 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+      - name: Ensure iPhone 17 Pro simulator exists
+        run: |
+          if ! xcrun simctl list devices available | grep -q "iPhone 17 Pro"; then
+            RUNTIME=$(xcrun simctl list runtimes available -j | python3 -c "import json,sys; rt=[r for r in json.load(sys.stdin)['runtimes'] if r['name'].startswith('iOS')]; print(sorted(rt, key=lambda r: r['version'])[-1]['identifier'])")
+            xcrun simctl create "iPhone 17 Pro" "iPhone 17 Pro" "$RUNTIME"
+          fi
+
       - run: node dist/cli.js generate -C samples/ios
       - run: node dist/cli.js build samples/ios/phonebook-out -o phonebook-site
 
