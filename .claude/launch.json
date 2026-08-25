@@ -10,6 +10,16 @@
       ],
       "port": 8642,
       "autoPort": true
+    },
+    {
+      "name": "promo-studio",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd promo-video && npx remotion studio --port \"${PORT:-3211}\""
+      ],
+      "port": 3211,
+      "autoPort": true
     }
   ]
 }
