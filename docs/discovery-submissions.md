@@ -6,7 +6,7 @@ Update the Status column as each one lands, then mirror the URLs onto SB-188.
 | # | Channel | Status | Listing URL | Blocked on |
 |---|---------|--------|-------------|------------|
 | 1 | MCP official registry | **Live** | https://registry.modelcontextprotocol.io/v0/servers?search=io.github.stag-build/phonebook | — |
-| 2 | Glama | Submitted | — | Glama indexing |
+| 2 | Glama | Listed, claim pending | https://glama.ai/mcp/servers/stag-build/phonebook | you to click "Login with GitHub to claim" |
 | 3 | Smithery | Not submitted | — | smithery.ai account |
 | 4 | punkpeye/awesome-mcp-servers | PR open | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
 | 5 | Changelog News | Drafted in Gmail | — | you to hit send |
@@ -39,14 +39,14 @@ and even after publicising it the cached token keeps the old grant. OIDC sideste
 
 ## 2. Glama
 
-Submit at https://glama.ai/mcp/servers — repo URL only, no copy needed:
+Already listed — Glama auto-crawled the repo, which is why a manual submission came back as
+"MCP server already exists for this repository". That mail is a duplicate notice, not a
+rejection: https://glama.ai/mcp/servers/stag-build/phonebook
 
-```
-https://github.com/stag-build/phonebook
-```
-
-Glama auto-indexes the tool list and schemas from the MCP server. It also mints a score
-badge; once listed, consider adding it to the README.
+The listing is **unclaimed**, and Glama warns that unclaimed servers have limited
+discoverability. Claiming a server under an org namespace needs `glama.json` at the repo root
+(committed) naming the maintainer's GitHub username, then "Login with GitHub to claim" on the
+listing page.
 
 ## 3. Smithery
 
