@@ -5,7 +5,7 @@ Update the Status column as each one lands, then mirror the URLs onto SB-188.
 
 | # | Channel | Status | Listing URL | Blocked on |
 |---|---------|--------|-------------|------------|
-| 1 | MCP official registry | npm 0.1.2 live, registry pending | — | `mcp-publisher login github && publish` |
+| 1 | MCP official registry | **Live** | https://registry.modelcontextprotocol.io/v0/servers?search=io.github.stag-build/phonebook | — |
 | 2 | Glama | Submitted | — | Glama indexing |
 | 3 | Smithery | Not submitted | — | smithery.ai account |
 | 4 | punkpeye/awesome-mcp-servers | PR open | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
@@ -26,17 +26,16 @@ Prep already committed in this repo:
 The registry validates ownership by fetching the **published** npm tarball and checking
 `mcpName` inside it — so npm must be republished *before* publishing to the registry.
 
-npm `0.1.2` is published and `npm view @stag-build/phonebook@0.1.2 mcpName` confirms the field
-made it into the tarball, so the npm half is done — no republish needed.
+Published 2026-08-30 as `io.github.stag-build/phonebook`, version 0.1.2, status `active`.
 
-```bash
-# mcp-publisher 1.8.1 already installed via brew
-mcp-publisher login github
-mcp-publisher publish
-```
+Publishing runs from CI: `.github/workflows/publish.yml` authenticates with
+`mcp-publisher login github-oidc`, so the registry validates namespace ownership from the
+workflow's OIDC token — issued to the repo itself. Every `v*.*.*` tag now pushes npm and the
+registry together; the job can also be dispatched manually to sync the registry alone.
 
-`mcp-publisher login github` opens a device-code flow; authenticate as a member of the
-`stag-build` GitHub org (the `io.github.stag-build/*` namespace is gated on org membership).
+Interactive `mcp-publisher login github` was tried first and is **not** the path to use here:
+it grants only `io.github.<your-username>/*` unless your `stag-build` membership is public,
+and even after publicising it the cached token keeps the old grant. OIDC sidesteps all of it.
 
 ## 2. Glama
 
