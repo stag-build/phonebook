@@ -8,8 +8,8 @@ Update the Status column as each one lands, then mirror the URLs onto SB-188.
 | 1 | MCP official registry | **Live** | https://registry.modelcontextprotocol.io/v0/servers?search=io.github.stag-build/phonebook | — |
 | 2 | Glama | Listed, claim pending | https://glama.ai/mcp/servers/stag-build/phonebook | you to click "Login with GitHub to claim" |
 | 3 | Smithery | Not submitted | — | smithery.ai account |
-| 4 | punkpeye/awesome-mcp-servers | PR open | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
-| 5 | Changelog News | Drafted in Gmail | — | you to hit send |
+| 4 | punkpeye/awesome-mcp-servers | PR open, badge added | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
+| 5 | Changelog News | **Sent** 2026-08-30 | — | their call, no reply expected |
 | 6 | Console.dev | Not submitted | — | submit link (site blocks bots) |
 | 7 | iOS Dev Weekly / Android Weekly | Not submitted | — | web forms, manual |
 
@@ -64,6 +64,10 @@ Format check done against their CONTRIBUTING.md and README:
 - Category: **💻 Developer Tools** (new entries go at the top of the section).
 - Legend symbols: `📇` TypeScript · `🏠` local service · `🍎` macOS · `🪟` Windows · `🐧` Linux.
 - Automated-agent PRs opt into fast-track review by appending `🤖🤖🤖` to the PR title.
+
+Maintainers now also require a Glama score badge on each entry (added 2026-08-30), placed
+right after the repo link — which is where the surrounding entries put it, despite their
+message saying "after the description".
 
 Line to add:
 
