@@ -1,8 +1,9 @@
 {
   "name": "@stag-build/phonebook",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Storybook-style static gallery generated from Compose @Preview / SwiftUI #Preview screenshots",
   "license": "MIT",
+  "mcpName": "io.github.stag-build/phonebook",
   "type": "module",
   "repository": {
     "type": "git",

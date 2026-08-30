@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.stag-build/phonebook",
+  "title": "Phonebook",
+  "description": "Self-hosted gallery of your SwiftUI #Preview and Jetpack Compose @Preview screens.",
+  "websiteUrl": "https://stag-build.github.io/phonebook/",
+  "repository": {
+    "url": "https://github.com/stag-build/phonebook",
+    "source": "github"
+  },
+  "version": "0.1.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@stag-build/phonebook",
+      "version": "0.1.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "npx",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "valueHint": "mcp",
+          "isRequired": true
+        }
+      ]
+    }
+  ]
+}

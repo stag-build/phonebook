@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -28,4 +29,26 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
-      - run: npm publish --access public
+
+      # Skip if this version is already on npm — lets the job be re-run (or
+      # dispatched manually) purely to sync the MCP registry.
+      - name: Publish to npm
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "@stag-build/phonebook@$VERSION" version >/dev/null 2>&1; then
+            echo "@stag-build/phonebook@$VERSION already on npm, skipping publish"
+          else
+            npm publish --access public
+          fi
+
+      # The MCP registry only stores metadata; it validates ownership of the
+      # io.github.stag-build/* namespace from this job's OIDC token, which is
+      # issued to the repo itself — so it does not depend on any individual's
+      # org membership being public.
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Authenticate to MCP registry
+        run: ./mcp-publisher login github-oidc
+      - name: Publish to MCP registry
+        run: ./mcp-publisher publish
