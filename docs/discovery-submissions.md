@@ -7,7 +7,7 @@ Update the Status column as each one lands, then mirror the URLs onto SB-188.
 |---|---------|--------|-------------|------------|
 | 1 | MCP official registry | **Live** | https://registry.modelcontextprotocol.io/v0/servers?search=io.github.stag-build/phonebook | — |
 | 2 | Glama | Listed, claim pending | https://glama.ai/mcp/servers/stag-build/phonebook | you to click "Login with GitHub to claim" |
-| 3 | Smithery | Not submitted | — | smithery.ai account |
+| 3 | Smithery | **Ruled out** | — | requires a hosted HTTPS endpoint |
 | 4 | punkpeye/awesome-mcp-servers | PR open, badge added | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
 | 5 | Changelog News | **Sent** 2026-08-30 | — | their call, no reply expected |
 | 6 | Console.dev | Not submitted | — | submit link (site blocks bots) |
@@ -48,14 +48,19 @@ discoverability. Claiming a server under an org namespace needs `glama.json` at 
 (committed) naming the maintainer's GitHub username, then "Login with GitHub to claim" on the
 listing page.
 
-## 3. Smithery
+## 3. Smithery — ruled out
 
-Dashboard: https://smithery.ai → Deploy Server → connect the GitHub repo. Description:
+Smithery's "Publish an MCP Server" flow requires an **MCP Server URL**: a live HTTPS endpoint
+it can reach. Phonebook has no such endpoint and cannot have one. It is stdio-only
+(`StdioServerTransport`, `src/mcp/server.ts`), and its tools shell out to Gradle and
+`xcodebuild` against the checkout on the developer's own disk, writing screenshots back into
+it. A process running on Smithery's infrastructure would have no repository to operate on.
 
-> Self-hosted Storybook-style preview gallery for SwiftUI and Jetpack Compose. Harvests your
-> existing `#Preview`/`@Preview` code into a browsable static site — no SaaS account, no new
-> test code. MCP-first: point a coding agent at it and it checks setup, fills preview gaps,
-> and builds the gallery for you.
+The same reasoning rules out Glama's connectors directory (https://glama.ai/mcp/connectors),
+which is also for hosted endpoints. Glama's main server listing is unaffected — that one
+indexes local servers fine.
+
+Revisit only if Phonebook ever grows a remote transport, which would be a different product.
 
 ## 4. punkpeye/awesome-mcp-servers
 
