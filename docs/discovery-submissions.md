@@ -6,7 +6,7 @@ Update the Status column as each one lands, then mirror the URLs onto SB-188.
 | # | Channel | Status | Listing URL | Blocked on |
 |---|---------|--------|-------------|------------|
 | 1 | MCP official registry | **Live** | https://registry.modelcontextprotocol.io/v0/servers?search=io.github.stag-build/phonebook | — |
-| 2 | Glama | **Listed + claimed** | https://glama.ai/mcp/servers/stag-build/phonebook | Dockerfile upload for checks |
+| 2 | Glama | **Listed, claimed, checks green** | https://glama.ai/mcp/servers/stag-build/phonebook | — |
 | 3 | Smithery | **Ruled out** | — | requires a hosted HTTPS endpoint |
 | 4 | punkpeye/awesome-mcp-servers | PR open, badge added | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
 | 5 | Changelog News | **Sent** 2026-08-30 | — | their call, no reply expected |
@@ -48,10 +48,27 @@ root naming the maintainer's *personal* GitHub username — GitHub OAuth has no 
 org", so that file is the bridge between the personal identity and the org-owned repo. After
 committing it the claim took a while to go through; Glama appears to cache the crawl.
 
-**Checks / Dockerfile.** The awesome-mcp-servers maintainers require listed servers to pass
-Glama's checks, which needs a container that starts and answers introspection. `Dockerfile` at
-the repo root does that — multi-stage, builds from source rather than installing the published
-npm package. Verified locally:
+**Checks — passing as of 2026-08-31**, release `v0.1.2`. Glama does *not* take an uploaded
+Dockerfile: the Admin → Dockerfile tab is a form that **generates** one, and two of its
+defaults are wrong for this repo. Both must be corrected or the build test fails (as it did on
+2026-08-26):
+
+| Field | Glama default | Correct value |
+|---|---|---|
+| Build steps | `["pnpm install", "pnpm run build"]` | `["npm ci", "npm run build"]` |
+| CMD arguments | `["mcp-proxy", "--", "node", "dist/cli.js"]` | `["mcp-proxy", "--", "node", "dist/cli.js", "mcp"]` |
+
+The CMD is the one that actually breaks it — without the `mcp` subcommand the container runs
+the CLI's top-level help and exits, so introspection can never succeed. Glama takes the
+release version from `package.json`, so it tracks npm automatically.
+
+Resulting scores: Server Coherence A (5/5 on all four criteria), Maintenance A, Tool Definition
+Quality A (3.7/5 average), 83% profile completion. The weakest signal is per-tool *Behavior*
+(`run_generate` 2/5) — tool descriptions don't disclose side effects, and no MCP tool
+annotations are set. Worth a pass if the score ever matters.
+
+`Dockerfile` at the repo root is kept independently: multi-stage, builds from source rather
+than installing the published npm package. Verified locally:
 
 ```bash
 docker build -t phonebook-mcp-check .
