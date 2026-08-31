@@ -5,6 +5,7 @@
 <p>A self-hosted, open-source alternative to Emerge Tools Snapshots: harvest your existing Compose <code>@Preview</code>s and SwiftUI <code>#Preview</code>s into a browsable, static HTML gallery — no SaaS account required.</p>
 
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+[![Glama MCP server score](https://glama.ai/mcp/servers/stag-build/phonebook/badges/score.svg)](https://glama.ai/mcp/servers/stag-build/phonebook)
 
 </div>
 
