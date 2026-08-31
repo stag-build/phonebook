@@ -10,7 +10,7 @@ Update the Status column as each one lands, then mirror the URLs onto SB-188.
 | 3 | Smithery | **Ruled out** | — | requires a hosted HTTPS endpoint |
 | 4 | punkpeye/awesome-mcp-servers | PR open, badge added | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
 | 5 | Changelog News | **Sent** 2026-08-30 | — | their call, no reply expected |
-| 6 | Console.dev | Drafted in Gmail | — | you to hit send |
+| 6 | Console.dev | **Sent** 2026-08-31 | — | their call |
 | 7 | iOS Dev Weekly / Android Weekly | **Both submitted** 2026-08-31 | — | curators' call |
 
 ---
@@ -159,3 +159,23 @@ Blurb used:
 > into a Storybook-style component gallery — a free alternative to paid snapshot-SaaS tools,
 > and MCP-first so it plugs into Claude Code / Cursor directly. MIT licensed, live demo:
 > https://stag-build.github.io/phonebook/
+
+## 8. Second wave (2026-08-31)
+
+| Target | Status | Notes |
+|---|---|---|
+| JStumpp/awesome-android | PR open — https://github.com/JStumpp/awesome-android/pull/447 | Added under `### Testing` |
+| vsouza/awesome-ios | **Ruled out** | Fails their hard rules — see below |
+| jetc.dev | Not submitted | `jetc.newsletter@commonsware.com`, Compose-only, issue #328, active |
+| Kotlin Weekly | Not submitted | `mailinglist@kotlinweekly.net`, subject must be `Link for submission - Kotlin Weekly` |
+| Android Dev Digest | Unverified | Behind Cloudflare, couldn't confirm it still ships |
+
+**awesome-ios is permanently out.** Their CONTRIBUTING lists hard rules and states that PRs failing
+any of them will be closed. Phonebook fails three: ≥100 stargazers (has 8), Swift Package Manager
+support (it's a Node CLI — structural, not a matter of waiting), and a declared iOS deployment
+target. Do not open this PR.
+
+**Compose "awesome" lists are dead.** The four largest were last pushed between 2022 and 2024.
+
+**awesome-android is a long shot** — accepted on format, but the repo has ~100 open PRs (48 older
+than eight months) and was last pushed 2025-10-27.
