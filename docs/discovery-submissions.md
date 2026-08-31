@@ -11,7 +11,7 @@ Update the Status column as each one lands, then mirror the URLs onto SB-188.
 | 4 | punkpeye/awesome-mcp-servers | PR open, badge added | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
 | 5 | Changelog News | **Sent** 2026-08-30 | — | their call, no reply expected |
 | 6 | Console.dev | Not submitted | — | submit link (site blocks bots) |
-| 7 | iOS Dev Weekly / Android Weekly | Not submitted | — | web forms, manual |
+| 7 | iOS Dev Weekly / Android Weekly | **Both submitted** 2026-08-31 | — | curators' call |
 
 ---
 
@@ -143,7 +143,15 @@ link has to be found by hand from the site footer. Blurb is ready:
 - iOS Dev Weekly: https://suggest.iosdevweekly.com (submission form, not email)
 - Android Weekly: form on https://androidweekly.net under "Submit stuff" (`#submit-stuff`)
 
-Both are forms rather than cold email, so paste this as the note:
+Both submitted 2026-08-31. **Submit the Medium article, not the repo** — iOS Dev Weekly's form
+asks "Is this a link to a blog post?" and Dave notes he already reads every site in the iOS Dev
+Directory via RSS, so a bare repo link is the weakest thing to send. The canonical write-up:
+
+https://medium.com/@orelzion/phonebook-a-storybook-style-preview-gallery-for-swiftui-and-compose-built-for-agents-e3e3f7c0a59a
+
+Note the Swift-library question counts a blog post *about* a Swift library as a yes.
+
+Blurb used:
 
 > Hi — submitting Phonebook (https://github.com/stag-build/phonebook) for consideration. It's
 > an open-source, self-hosted tool that turns your app's existing `#Preview`/`@Preview` code
