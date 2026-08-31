@@ -6,7 +6,7 @@ Update the Status column as each one lands, then mirror the URLs onto SB-188.
 | # | Channel | Status | Listing URL | Blocked on |
 |---|---------|--------|-------------|------------|
 | 1 | MCP official registry | **Live** | https://registry.modelcontextprotocol.io/v0/servers?search=io.github.stag-build/phonebook | — |
-| 2 | Glama | Listed, claim pending | https://glama.ai/mcp/servers/stag-build/phonebook | you to click "Login with GitHub to claim" |
+| 2 | Glama | **Listed + claimed** | https://glama.ai/mcp/servers/stag-build/phonebook | Dockerfile upload for checks |
 | 3 | Smithery | **Ruled out** | — | requires a hosted HTTPS endpoint |
 | 4 | punkpeye/awesome-mcp-servers | PR open, badge added | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
 | 5 | Changelog News | **Sent** 2026-08-30 | — | their call, no reply expected |
@@ -43,10 +43,25 @@ Already listed — Glama auto-crawled the repo, which is why a manual submission
 "MCP server already exists for this repository". That mail is a duplicate notice, not a
 rejection: https://glama.ai/mcp/servers/stag-build/phonebook
 
-The listing is **unclaimed**, and Glama warns that unclaimed servers have limited
-discoverability. Claiming a server under an org namespace needs `glama.json` at the repo root
-(committed) naming the maintainer's GitHub username, then "Login with GitHub to claim" on the
-listing page.
+Claimed 2026-08-31. Claiming a server under an org namespace needs `glama.json` at the repo
+root naming the maintainer's *personal* GitHub username — GitHub OAuth has no "sign in as an
+org", so that file is the bridge between the personal identity and the org-owned repo. After
+committing it the claim took a while to go through; Glama appears to cache the crawl.
+
+**Checks / Dockerfile.** The awesome-mcp-servers maintainers require listed servers to pass
+Glama's checks, which needs a container that starts and answers introspection. `Dockerfile` at
+the repo root does that — multi-stage, builds from source rather than installing the published
+npm package. Verified locally:
+
+```bash
+docker build -t phonebook-mcp-check .
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | docker run -i --rm phonebook-mcp-check
+```
+
+Returns the handshake plus all five tools. Note Glama wants the Dockerfile uploaded through
+their Admin tab, not just present in the repo.
 
 ## 3. Smithery — ruled out
 
