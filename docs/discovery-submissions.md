@@ -10,7 +10,7 @@ Update the Status column as each one lands, then mirror the URLs onto SB-188.
 | 3 | Smithery | **Ruled out** | — | requires a hosted HTTPS endpoint |
 | 4 | punkpeye/awesome-mcp-servers | PR open, badge added | https://github.com/punkpeye/awesome-mcp-servers/pull/13229 | maintainer review |
 | 5 | Changelog News | **Sent** 2026-08-30 | — | their call, no reply expected |
-| 6 | Console.dev | Not submitted | — | submit link (site blocks bots) |
+| 6 | Console.dev | Drafted in Gmail | — | you to hit send |
 | 7 | iOS Dev Weekly / Android Weekly | **Both submitted** 2026-08-31 | — | curators' call |
 
 ---
@@ -131,8 +131,9 @@ Line to add:
 
 ## 6. Console.dev
 
-Console.dev blocks automated access (403 to curl and to a headless browser), so the submission
-link has to be found by hand from the site footer. Blurb is ready:
+**There is no submission form.** The site has exactly one relevant link — a `mailto:` to
+hello@console.dev labelled "Contact". The `/about/#submit-a-tool` URL in the original plan is a
+404, and console.dev 403s curl (a real browser gets through). Email is the only route. Blurb:
 
 > **Phonebook** — Self-hosted, open-source Storybook for native mobile apps. Turns existing
 > SwiftUI `#Preview` and Jetpack Compose `@Preview` code into a browsable static gallery.
