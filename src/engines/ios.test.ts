@@ -85,3 +85,39 @@ describe('resolveOnlyTesting', () => {
     expect(await resolveOnlyTesting(cfg({}), '/nonexistent')).toBeUndefined();
   });
 });
+
+describe('mapSidecar previewName is an identity, not a label', () => {
+  it('qualifies the sidecar label with the source file', () => {
+    expect(mapSidecar('x.png', sidecar()).previewName).toBe(
+      'PhonebookSample/UserCard.swift:UserCard/Dark',
+    );
+  });
+
+  it('keeps unnamed previews in different files apart', () => {
+    const a = mapSidecar('a.png', {
+      display_name: 'At line #14',
+      group: 'PhonebookSample/ContentView.swift',
+    });
+    const b = mapSidecar('b.png', {
+      display_name: 'At line #14',
+      group: 'PhonebookSample/SettingsView.swift',
+    });
+    expect(a.previewName).not.toBe(b.previewName);
+    expect(a.previewName).toBe('PhonebookSample/ContentView.swift:At line #14');
+  });
+
+  it('falls back to the png name when the sidecar carries no label', () => {
+    expect(mapSidecar('Sample_Badge_Success.png', { group: 'Sample/Badge.swift' }).previewName).toBe(
+      'Sample/Badge.swift:Sample_Badge_Success',
+    );
+  });
+
+  it('uses the label alone when there is no source file', () => {
+    expect(mapSidecar('x.png', { display_name: 'Badge/Error' }).previewName).toBe('Badge/Error');
+  });
+
+  it('no longer merely repeats component and state', () => {
+    const e = mapSidecar('x.png', sidecar());
+    expect(e.previewName).not.toBe(`${e.component}/${e.state}`);
+  });
+});

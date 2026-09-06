@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
 import { diagnoseXcodebuildFailure } from '../errors.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
+import { readPngSize } from '../png.js';
 import { parsePreviewName, spaceCamelCase } from '../naming.js';
 import { gitInfo } from './git.js';
 import { findSnapshotTestSubclass, findSnapshottingTestsTargets, readPbxprojText } from '../ios/snapshotTestClass.js';
@@ -110,7 +111,8 @@ export async function generateIos(
       hash.update(png);
       const imageName = `${hash.digest('hex').slice(0, 16)}.png`;
       await copyFile(join(exportDir, png), join(imagesDir, imageName));
-      entries.push({ ...meta, image: `images/${imageName}` });
+      const size = await readPngSize(join(imagesDir, imageName));
+      entries.push({ ...meta, image: `images/${imageName}`, ...(size ?? {}) });
     }
 
     entries.sort(
@@ -157,6 +159,24 @@ async function readSidecar(path: string): Promise<SnapshotSidecar> {
   }
 }
 
+/**
+ * A stable, unique identifier for this preview within the project.
+ *
+ * Android has a fully qualified name to hand. iOS has nothing equivalent: the
+ * sidecar's `display_name` is a label, it usually repeats what `component` and
+ * `state` already say, and for an unnamed preview Xcode substitutes the
+ * placeholder "At line #14" — not a name, and identical for every unnamed
+ * preview in every other file. Qualifying whatever the sidecar gives with the
+ * source file makes the result unique across the project and stable between
+ * runs; it changes when the preview is renamed or moved, which is when its
+ * identity genuinely changed.
+ */
+function previewIdentity(png: string, sidecar: SnapshotSidecar): string {
+  const label = sidecar.display_name?.trim() || png.replace(/\.png$/, '');
+  const group = sidecar.group?.trim();
+  return group ? `${group}:${label}` : label;
+}
+
 /** Exported for tests. Maps one PNG + sidecar to a manifest entry (minus image path). */
 export function mapSidecar(png: string, sidecar: SnapshotSidecar): Omit<ManifestEntry, 'image'> {
   const container = sidecar.context?.preview?.container_display_name;
@@ -176,7 +196,7 @@ export function mapSidecar(png: string, sidecar: SnapshotSidecar): Omit<Manifest
     state,
     module: module ?? 'app',
     sourceFile: group,
-    previewName: rawName ?? png,
+    previewName: previewIdentity(png, sidecar),
     theme: scheme === 'dark' ? 'dark' : scheme === 'light' ? 'light' : undefined,
     device: sidecar.context?.simulator?.device_name,
   };

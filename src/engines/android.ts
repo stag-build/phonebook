@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
 import { diagnoseGradleFailure } from '../errors.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
+import { readPngSize } from '../png.js';
 import { parsePreviewName } from '../naming.js';
 import { gitInfo } from './git.js';
 
@@ -67,6 +68,7 @@ export async function generateAndroid(
       hash.update(module + file);
       const imageName = `${hash.digest('hex').slice(0, 16)}.png`;
       await copyFile(join(roborazziDir, file), join(imagesDir, imageName));
+      const size = await readPngSize(join(imagesDir, imageName));
       // A dark-uiMode preview named e.g. UserCardDarkPreview is the Dark state
       // of UserCard, not a separate component.
       let functionName = meta.functionName;
@@ -84,8 +86,8 @@ export async function generateAndroid(
         ...(meta.sourceFile ? { sourceFile: meta.sourceFile } : {}),
         previewName: meta.fqn,
         image: `images/${imageName}`,
+        ...(size ?? {}),
         ...(meta.theme ? { theme: meta.theme } : {}),
-        ...(meta.tags && meta.tags.length > 0 ? { tags: meta.tags } : {}),
       });
     }
   }
