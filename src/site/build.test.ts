@@ -175,3 +175,46 @@ describe('buildSite in-place mode (outDir === bundleDir)', () => {
     expect(html).toContain('images/button-default.png');
   });
 });
+
+describe('buildSite refuses a manifest whose paths escape the bundle', () => {
+  let bundleDir: string;
+  let outDir: string;
+
+  beforeAll(async () => {
+    const root = await mkdtemp(join(tmpdir(), 'phonebook-escape-test-'));
+    bundleDir = join(root, 'bundle');
+    outDir = join(root, 'site');
+    await mkdir(join(bundleDir, 'images'), { recursive: true });
+    await writeFile(
+      join(bundleDir, 'images', 'ok.png'),
+      Buffer.from(TINY_PNG_BASE64, 'base64'),
+    );
+  });
+
+  async function writeManifest(image: string): Promise<void> {
+    const manifest = {
+      schemaVersion: 1,
+      platform: 'android',
+      app: { name: 'Sample App', generatedAt: '2026-08-21T00:00:00.000Z' },
+      entries: [
+        { component: 'Button', state: 'Default', module: 'ui', previewName: 'P', image },
+      ],
+    };
+    await writeFile(join(bundleDir, 'manifest.json'), JSON.stringify(manifest), 'utf8');
+  }
+
+  it('throws instead of rendering an <img> at an absolute path', async () => {
+    await writeManifest('/Users/someone/.ssh/id_rsa');
+    await expect(buildSite(bundleDir, outDir)).rejects.toThrow(/"image"/);
+  });
+
+  it('throws instead of rendering an <img> that climbs out of the bundle', async () => {
+    await writeManifest('../../../../etc/passwd');
+    await expect(buildSite(bundleDir, outDir)).rejects.toThrow(/escapes the bundle root/);
+  });
+
+  it('still builds a bundle whose paths are contained', async () => {
+    await writeManifest('images/ok.png');
+    await expect(buildSite(bundleDir, outDir)).resolves.toBe(1);
+  });
+});
