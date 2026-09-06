@@ -17,11 +17,11 @@ export interface ManifestEntry {
   previewName: string;
   /** Image path relative to the bundle root, e.g. "images/ab12cd.png" */
   image: string;
+  /** Pixel dimensions of `image`, read from its PNG header at generate time */
   width?: number;
   height?: number;
   theme?: 'light' | 'dark';
   device?: string;
-  tags?: string[];
 }
 
 export interface Manifest {

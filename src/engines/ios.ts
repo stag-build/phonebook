@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
 import { diagnoseXcodebuildFailure } from '../errors.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
+import { readPngSize } from '../png.js';
 import { parsePreviewName, spaceCamelCase } from '../naming.js';
 import { gitInfo } from './git.js';
 import { findSnapshotTestSubclass, findSnapshottingTestsTargets, readPbxprojText } from '../ios/snapshotTestClass.js';
@@ -110,7 +111,8 @@ export async function generateIos(
       hash.update(png);
       const imageName = `${hash.digest('hex').slice(0, 16)}.png`;
       await copyFile(join(exportDir, png), join(imagesDir, imageName));
-      entries.push({ ...meta, image: `images/${imageName}` });
+      const size = await readPngSize(join(imagesDir, imageName));
+      entries.push({ ...meta, image: `images/${imageName}`, ...(size ?? {}) });
     }
 
     entries.sort(
