@@ -13,7 +13,11 @@ export interface ManifestEntry {
   module: string;
   /** Path of the source file containing the preview, relative to the project root, when known */
   sourceFile?: string;
-  /** Fully qualified original preview identifier (FQN of the preview function / test) */
+  /**
+   * Stable, unique identifier for the preview within the project: a fully
+   * qualified name on Android, `<source file>:<label>` on iOS. This is
+   * identity, not display text — `component` and `state` are what a reader sees.
+   */
   previewName: string;
   /** Image path relative to the bundle root, e.g. "images/ab12cd.png" */
   image: string;
