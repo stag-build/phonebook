@@ -1,6 +1,6 @@
 {
   "name": "@stag-build/phonebook",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Storybook-style static gallery generated from Compose @Preview / SwiftUI #Preview screenshots",
   "license": "MIT",
   "mcpName": "io.github.stag-build/phonebook",
