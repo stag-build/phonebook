@@ -1,0 +1,104 @@
+# Cutting a release is one dispatch of this workflow. It decides the next
+# version, writes it to every file that carries one, tags it, and pushes — the
+# tag is what triggers publish.yml.
+#
+# It exists because the version used to be bumped by hand in three places
+# (package.json, and server.json twice). Miss one and the MCP registry rejects
+# the publish as a duplicate; miss the tag and there is no record of what
+# shipped. Both happened to 0.1.2, which reached npm and the registry with no
+# v0.1.2 tag behind it.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Which part of the version to increment'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      exact:
+        description: 'Exact version to release, e.g. 0.2.0 (overrides the bump choice)'
+        type: string
+        required: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+
+      # Nothing gets a version number until it passes. A tag is hard to retract
+      # once publish.yml has acted on it.
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      - name: Work out the new version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          EXACT: ${{ inputs.exact }}
+        run: |
+          set -euo pipefail
+          if [ -n "$EXACT" ]; then
+            NEW=$(npm version "$EXACT" --no-git-tag-version)
+          else
+            NEW=$(npm version "$BUMP" --no-git-tag-version)
+          fi
+          NEW=${NEW#v}
+          echo "Releasing $NEW"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to reuse a published version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if npm view "@stag-build/phonebook@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::$VERSION is already on npm. Pick a higher version."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists."
+            exit 1
+          fi
+
+      # server.json carries the version twice — once for the server, once for
+      # the npm package it points at. Both have to move together.
+      - name: Sync server.json
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const version = process.env.VERSION;
+            const server = JSON.parse(fs.readFileSync("server.json", "utf8"));
+            server.version = version;
+            for (const pkg of server.packages ?? []) pkg.version = version;
+            fs.writeFileSync("server.json", JSON.stringify(server, null, 2) + "\n");
+          '
+          node scripts/check-versions-agree.mjs
+
+      - name: Commit and tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json server.json
+          git commit -m "Release v$VERSION"
+          git tag "v$VERSION"
+          git push origin HEAD:main
+          git push origin "v$VERSION"
+          echo "Tagged v$VERSION — publish.yml takes it from here." >> "$GITHUB_STEP_SUMMARY"

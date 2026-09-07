@@ -50,5 +50,20 @@ jobs:
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
       - name: Authenticate to MCP registry
         run: ./mcp-publisher login github-oidc
+      # Idempotent for the same reason the npm step above is: this job can be
+      # re-run, or dispatched to sync one registry after the other already
+      # succeeded. The registry rejects a repeat version with a 400, which is
+      # "nothing to do" here, not a failure.
       - name: Publish to MCP registry
-        run: ./mcp-publisher publish
+        run: |
+          set +e
+          OUTPUT=$(./mcp-publisher publish 2>&1)
+          STATUS=$?
+          echo "$OUTPUT"
+          if [ $STATUS -ne 0 ]; then
+            if echo "$OUTPUT" | grep -q 'cannot publish duplicate version'; then
+              echo "Already on the MCP registry at this version, skipping"
+              exit 0
+            fi
+            exit $STATUS
+          fi
