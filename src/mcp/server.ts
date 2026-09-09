@@ -31,7 +31,7 @@ function textResult(text: string) {
   return { content: [{ type: 'text' as const, text }] };
 }
 
-function summarizeCoverage(report: CoverageReport): string {
+export function summarizeCoverage(report: CoverageReport): string {
   const { stats } = report;
   const withoutPreview = stats.components - stats.withPreview;
   const orphanCount = report.orphanPreviews.length;
@@ -51,52 +51,62 @@ function summarizeCoverage(report: CoverageReport): string {
 }
 
 const HINT_LIST_CAP = 40;
-const GAP_LIST_CAP = 60;
+const GAP_COMPONENT_CAP = 60;
 
 /**
  * What each component is missing, which is the half `summarizeHints` cannot
  * see: a hint needs a preview to exist before it can say anything about it.
  *
- * This is a to-do list for the agent reading it, ordered so the components with
- * nothing at all come first. It reports; it never edits.
+ * Grouped by component rather than listed flat. A flat list sorted by severity
+ * put every "has no preview" first, and on a repository with a hundred of them
+ * the cap fell before a single state gap was reached — the specific, useful
+ * half of the report never reached the reader. Components carrying the most
+ * missing states come first for the same reason.
+ *
+ * It reports; it never edits.
  */
-function summarizeGaps(report: CoverageReport): string {
-  const entries = report.components.flatMap((c) =>
-    (c.gaps ?? []).map((gap) => ({ component: c, gap })),
-  );
+export function summarizeGaps(report: CoverageReport): string {
+  const withGaps = report.components.filter((c) => (c.gaps ?? []).length > 0);
+  const total = withGaps.reduce((sum, c) => sum + (c.gaps ?? []).length, 0);
 
-  if (entries.length === 0) {
+  if (total === 0) {
     return 'Missing previews (0)';
   }
 
-  const severityRank = (rule: string, severity: string) =>
-    rule === 'no-preview' ? 0 : severity === 'warning' ? 1 : 2;
-  entries.sort(
+  const warnings = (component: (typeof withGaps)[number]) =>
+    (component.gaps ?? []).filter((g) => g.severity === 'warning').length;
+
+  const ordered = [...withGaps].sort(
     (a, b) =>
-      severityRank(a.gap.rule, a.gap.severity) - severityRank(b.gap.rule, b.gap.severity) ||
-      a.component.file.localeCompare(b.component.file) ||
-      a.component.line - b.component.line,
+      warnings(b) - warnings(a) ||
+      (b.gaps ?? []).length - (a.gaps ?? []).length ||
+      a.file.localeCompare(b.file) ||
+      a.line - b.line,
   );
 
-  const shown = entries.slice(0, GAP_LIST_CAP);
-  const lines = shown.map(
-    (e) =>
-      `${e.component.file}:${e.component.line} ${e.component.name} [${e.gap.rule}] ${e.gap.message} -> ${e.gap.suggestion}`,
-  );
-  const remaining = entries.length - shown.length;
+  const shown = ordered.slice(0, GAP_COMPONENT_CAP);
+  const blocks = shown.map((component) => {
+    const gaps = component.gaps ?? [];
+    const header = `${component.file}:${component.line} ${component.name} (${gaps.length} missing)`;
+    const lines = gaps.map((g) => `  [${g.rule}] ${g.message} -> ${g.suggestion}`);
+    return [header, ...lines].join('\n');
+  });
+
+  const remaining = ordered.length - shown.length;
   if (remaining > 0) {
-    lines.push(`... and ${remaining} more (see JSON)`);
+    blocks.push(`... and ${remaining} more component${remaining === 1 ? '' : 's'} (see JSON)`);
   }
 
   return [
-    `Missing previews (${entries.length})`,
-    ...lines,
+    `Missing previews (${total} across ${withGaps.length} component${withGaps.length === 1 ? '' : 's'})`,
+    '',
+    ...blocks,
     '',
     'Read each component before writing previews: the states above are inferred from its parameters, and only its source says which of them are worth a preview. Call get_preview_guidance for the naming convention and a template.',
   ].join('\n');
 }
 
-function summarizeHints(report: CoverageReport): string {
+export function summarizeHints(report: CoverageReport): string {
   const allPreviews = [
     ...report.components.flatMap((c) => c.previews),
     ...report.orphanPreviews,
