@@ -40,6 +40,9 @@ export interface ScannedComponent {
   /** Stored properties (iOS) or composable parameters (Android). What the
    * component's states are derived from. */
   properties?: ComponentProperty[];
+  /** Types read via `@Environment(X.self)` (iOS). An unsatisfied one traps at
+   * render, so a preview that omits it is broken rather than incomplete. */
+  environmentTypes?: string[];
   /** Previews this component should have and doesn't. See src/scan/gaps.ts. */
   gaps?: CoverageGap[];
 }

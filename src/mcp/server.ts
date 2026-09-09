@@ -150,6 +150,8 @@ Canvas size (Android): preview dimensions come only from the @Preview annotation
 
 Canvas size (iOS): preview dimensions come from traits: (e.g. .fixedLayout(width:height:)) or .previewDevice on the #Preview, not from a frame modifier in the view body.
 
+Environment (iOS): a preview must supply every object the view tree reads with @Environment(SomeType.self). SwiftUI has no default for one, so an @Observable that is missing traps the moment the body reads it — the preview does not render wrong, it crashes. Read the view's own @Environment declarations, and its subviews', and pass each one: .environment(SomeType.shared), .environment(SomeType()), or the project's own preview helper if it has one (a \`func ...() -> some View\` extension that chains .environment calls). analyze_coverage reports the direct ones it can see as \`env-missing\`; a subview's needs are yours to find. The keypath form, @Environment(\\.openURL), always has a value and never needs supplying.
+
 Snapshot test class (iOS): the SnapshotTest subclass that records previews must live in the app-hosted unit-test target's own folder (the target linking SnapshottingTests, hosted via TEST_HOST/BUNDLE_LOADER) — run \`phonebook doctor\` to see which target and where. In a project using Xcode's filesystem-synchronized groups, just creating the file in that folder is enough (Xcode picks it up automatically); \`phonebook init --write-snapshot-class\` can do this for you when that condition holds.`;
 
 function androidTemplate(component: string, states: string[]): string {

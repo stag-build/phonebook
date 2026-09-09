@@ -47,6 +47,11 @@ export interface CoverageGapInput {
    * has a known, finite set of states; a property of any other named type is
    * left alone rather than guessed at. */
   enumTypes?: string[];
+  /** Types the component reads via `@Environment(X.self)` (iOS only). */
+  environmentTypes?: string[];
+  /** Everything the previews pass to `.environment(...)`, including through any
+   * project helper they call. A type named anywhere in here is supplied. */
+  environmentProvided?: string;
 }
 
 /** A state name the previews already mention, however it is spelled. */
@@ -159,6 +164,30 @@ export function componentGaps(input: CoverageGapInput): CoverageGap[] {
           suggestion: `one preview per case of ${prop.type}, named "${input.component}/<Case>"`,
         });
       }
+    }
+  }
+
+  // Before every configuration rule below, because those describe a preview
+  // that renders the wrong thing and this one describes a preview that does not
+  // render at all. SwiftUI has no default for an @Observable read out of the
+  // environment: the property's getter traps the moment the body reads it, so a
+  // preview missing one is not thin coverage, it is a crash with a name.
+  //
+  // Direct reads only. A view that renders a subview with environment needs of
+  // its own still traps, and finding that needs the call graph rather than the
+  // one struct — worth doing, not done here, and a rule that catches the direct
+  // case is already the difference between a preview that runs and one that
+  // does not.
+  if (input.platform === 'ios' && previewCount > 0) {
+    const provided = input.environmentProvided ?? '';
+    for (const type of input.environmentTypes ?? []) {
+      if (provided.includes(type)) continue;
+      gaps.push({
+        rule: 'env-missing',
+        severity: 'warning',
+        message: `"${input.component}" reads @Environment(${type}.self) and no preview supplies one, so every preview of it traps at render.`,
+        suggestion: `pass ${type} to .environment(...) in each preview — an unsatisfied @Environment traps rather than defaulting`,
+      });
     }
   }
 

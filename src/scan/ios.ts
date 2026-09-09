@@ -16,12 +16,17 @@ export async function scanIos(projectDir: string): Promise<CoverageReport> {
   const files = await walkSwiftFiles(projectDir);
   const extraLocales = await detectLocales(projectDir);
   const enumTypes = new Set<string>();
+  // Project-wide: a preview calls `withPreviewsEnv()` in one module and the
+  // function that says what that supplies lives in another, so this cannot be
+  // resolved a file at a time.
+  const envHelpers = new Map<string, string>();
 
   for (const file of files) {
     const relFile = relative(projectDir, file);
     const content = await readFile(file, 'utf8');
 
     for (const enumName of findEnums(content)) enumTypes.add(enumName);
+    for (const [name, provided] of findEnvironmentHelpers(content)) envHelpers.set(name, provided);
 
     const fileComponents = findViewStructs(content, relFile);
     const filePreviews = findPreviews(content, relFile);
@@ -43,6 +48,11 @@ export async function scanIos(projectDir: string): Promise<CoverageReport> {
       previewText: component.previews.map((p) => p.annotationText ?? '').join('\n'),
       extraLocales,
       enumTypes: [...enumTypes],
+      ...(component.environmentTypes ? { environmentTypes: component.environmentTypes } : {}),
+      environmentProvided: environmentProvided(
+        component.previews.map((p) => p.annotationText ?? '').join('\n'),
+        envHelpers,
+      ),
     });
     if (gaps.length > 0) component.gaps = gaps;
   }
@@ -61,13 +71,16 @@ function findViewStructs(content: string, relFile: string): ScannedComponent[] {
   const regex = /(?:struct|final class)\s+([A-Z]\w*)\s*:\s*[^{]*\bView\b/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(content)) !== null) {
-    const properties = findStoredProperties(content, regex.lastIndex);
+    const body = structBody(content, regex.lastIndex);
+    const properties = findStoredProperties(body);
+    const environmentTypes = findEnvironmentReads(body);
     results.push({
       name: match[1],
       file: relFile,
       line: lineNumberAt(content, match.index),
       previews: [],
       ...(properties.length > 0 ? { properties } : {}),
+      ...(environmentTypes.length > 0 ? { environmentTypes } : {}),
     });
   }
   return results;
@@ -109,11 +122,17 @@ function findPreviews(content: string, relFile: string): ScannedPreview[] {
   // Legacy: struct X_Previews: PreviewProvider
   const legacyRegex = /struct\s+(\w+)_Previews\s*:\s*PreviewProvider/g;
   while ((match = legacyRegex.exec(content)) !== null) {
+    // Read the struct, same as a #Preview body. Reporting nothing here made a
+    // legacy preview look like it declared nothing: never dark, and supplying
+    // no environment object it in fact supplies — two false alarms on the
+    // oldest previews in a project, which are the ones least likely to be wrong.
+    const source = `${match[0]} {${structBody(content, legacyRegex.lastIndex)}}`;
     results.push({
       name: `${match[1]}_Previews`,
       file: relFile,
       line: lineNumberAt(content, match.index),
-      dark: false,
+      dark: isDarkPreview(source, undefined),
+      annotationText: source,
     });
   }
 
@@ -161,7 +180,7 @@ function previewSource(content: string, matchIndex: number, bodyFrom: number): s
 }
 
 /**
- * Stored properties of the struct whose declaration ends at `from`.
+ * Stored properties of a struct, given its body.
  *
  * Only the declaration line matters, so this reads lines rather than parsing
  * Swift: a stored property is `let`/`var name: Type`, optionally preceded by
@@ -169,8 +188,7 @@ function previewSource(content: string, matchIndex: number, bodyFrom: number): s
  * that always appears and never describes a state, and a `var` with a `{`
  * before any `=` is computed, so both are skipped.
  */
-function findStoredProperties(content: string, from: number): ComponentProperty[] {
-  const body = structBody(content, from);
+function findStoredProperties(body: string): ComponentProperty[] {
   const properties: ComponentProperty[] = [];
   const declaration =
     /^\s*(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:private|fileprivate|internal|public|package)\s+)?(?:let|var)\s+(\w+)\s*:\s*([^={\n]+)/;
@@ -187,6 +205,87 @@ function findStoredProperties(content: string, from: number): ComponentProperty[
     properties.push({ name, type, kind: classifyType(type) });
   }
   return properties;
+}
+
+/**
+ * Types the struct reads out of the environment by type — `@Environment(X.self)`.
+ *
+ * The keypath form, `@Environment(\\.openURL)`, is deliberately not matched: it
+ * reads a value SwiftUI always provides, so it can never be the missing thing.
+ * Only an object looked up by its own type can be absent, and when it is, the
+ * read traps.
+ */
+function findEnvironmentReads(body: string): string[] {
+  const found = new Set<string>();
+  const regex = /@Environment\(\s*([A-Z]\w*)\.self\s*\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(body)) !== null) found.add(match[1]);
+  return [...found];
+}
+
+/**
+ * What each `-> some View` helper in this file supplies to the environment,
+ * keyed by function name.
+ *
+ * A preview that calls `withPreviewsEnv()` supplies everything that function
+ * supplies, and the preview's own text names none of it. Without this the rule
+ * would flag every component in a project that has such a helper — which is
+ * every project that has more than a handful of previews.
+ */
+function findEnvironmentHelpers(content: string): Map<string, string> {
+  const helpers = new Map<string, string>();
+  const regex = /func\s+(\w+)\s*\([^)]*\)\s*->\s*some\s+View/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null) {
+    helpers.set(match[1], environmentArguments(structBody(content, regex.lastIndex)));
+  }
+  return helpers;
+}
+
+/** Everything the previews supply, directly or through a helper they call. */
+function environmentProvided(previewText: string, helpers: Map<string, string>): string {
+  const parts = [environmentArguments(previewText)];
+  for (const [name, provided] of helpers) {
+    if (new RegExp(`\\b${name}\\s*\\(`).test(previewText)) parts.push(provided);
+  }
+  return parts.join('\n');
+}
+
+/**
+ * The arguments of every `.environment(...)` call in some source, concatenated.
+ *
+ * Kept as text rather than resolved to type names because the value passed is
+ * rarely the type itself: `.environment(StatusDataControllerProvider.shared
+ * .dataController(for:client:))` supplies a StatusDataController and never
+ * writes that name as the head of the expression. Matching on the text covers
+ * both spellings, and its failure mode is silence rather than a false alarm.
+ *
+ * The leading dot is optional because a helper written as an extension on View
+ * calls the first one on itself — `environment(CurrentAccount.shared)` — and
+ * only chains the rest. Requiring the dot loses whatever the first call
+ * supplies, which is the one a project's preview helper opens with.
+ */
+function environmentArguments(source: string): string {
+  const parts: string[] = [];
+  const regex = /\benvironment\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(source)) !== null) {
+    parts.push(balancedArgument(source, regex.lastIndex - 1));
+  }
+  return parts.join('\n');
+}
+
+/** The text inside the parenthesis opening at `openIndex`, to its match. */
+function balancedArgument(source: string, openIndex: number): string {
+  let depth = 0;
+  for (let i = openIndex; i < source.length; i++) {
+    if (source[i] === '(') depth++;
+    else if (source[i] === ')') {
+      depth--;
+      if (depth === 0) return source.slice(openIndex + 1, i);
+    }
+  }
+  return source.slice(openIndex + 1);
 }
 
 /** Enum type names declared in this file, including indirect and raw-value enums. */
