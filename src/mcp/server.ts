@@ -31,7 +31,7 @@ function textResult(text: string) {
   return { content: [{ type: 'text' as const, text }] };
 }
 
-function summarizeCoverage(report: CoverageReport): string {
+export function summarizeCoverage(report: CoverageReport): string {
   const { stats } = report;
   const withoutPreview = stats.components - stats.withPreview;
   const orphanCount = report.orphanPreviews.length;
@@ -40,6 +40,10 @@ function summarizeCoverage(report: CoverageReport): string {
     `With preview: ${stats.withPreview}`,
     `Without preview: ${withoutPreview}`,
     `With dark preview: ${stats.withDarkPreview}`,
+    `Components with missing previews: ${stats.componentsWithGaps}`,
+    report.extraLocales.length > 0
+      ? `Localizations beyond the development language: ${report.extraLocales.join(', ')}`
+      : 'Localizations beyond the development language: none',
     orphanCount > 0
       ? `Orphan previews (could not be matched to a component in the same file): ${orphanCount}`
       : `Orphan previews (unmatched to a component): ${orphanCount}`,
@@ -47,8 +51,62 @@ function summarizeCoverage(report: CoverageReport): string {
 }
 
 const HINT_LIST_CAP = 40;
+const GAP_COMPONENT_CAP = 60;
 
-function summarizeHints(report: CoverageReport): string {
+/**
+ * What each component is missing, which is the half `summarizeHints` cannot
+ * see: a hint needs a preview to exist before it can say anything about it.
+ *
+ * Grouped by component rather than listed flat. A flat list sorted by severity
+ * put every "has no preview" first, and on a repository with a hundred of them
+ * the cap fell before a single state gap was reached — the specific, useful
+ * half of the report never reached the reader. Components carrying the most
+ * missing states come first for the same reason.
+ *
+ * It reports; it never edits.
+ */
+export function summarizeGaps(report: CoverageReport): string {
+  const withGaps = report.components.filter((c) => (c.gaps ?? []).length > 0);
+  const total = withGaps.reduce((sum, c) => sum + (c.gaps ?? []).length, 0);
+
+  if (total === 0) {
+    return 'Missing previews (0)';
+  }
+
+  const warnings = (component: (typeof withGaps)[number]) =>
+    (component.gaps ?? []).filter((g) => g.severity === 'warning').length;
+
+  const ordered = [...withGaps].sort(
+    (a, b) =>
+      warnings(b) - warnings(a) ||
+      (b.gaps ?? []).length - (a.gaps ?? []).length ||
+      a.file.localeCompare(b.file) ||
+      a.line - b.line,
+  );
+
+  const shown = ordered.slice(0, GAP_COMPONENT_CAP);
+  const blocks = shown.map((component) => {
+    const gaps = component.gaps ?? [];
+    const header = `${component.file}:${component.line} ${component.name} (${gaps.length} missing)`;
+    const lines = gaps.map((g) => `  [${g.rule}] ${g.message} -> ${g.suggestion}`);
+    return [header, ...lines].join('\n');
+  });
+
+  const remaining = ordered.length - shown.length;
+  if (remaining > 0) {
+    blocks.push(`... and ${remaining} more component${remaining === 1 ? '' : 's'} (see JSON)`);
+  }
+
+  return [
+    `Missing previews (${total} across ${withGaps.length} component${withGaps.length === 1 ? '' : 's'})`,
+    '',
+    ...blocks,
+    '',
+    'Read each component before writing previews: the states above are inferred from its parameters, and only its source says which of them are worth a preview. Call get_preview_guidance for the naming convention and a template.',
+  ].join('\n');
+}
+
+export function summarizeHints(report: CoverageReport): string {
   const allPreviews = [
     ...report.components.flatMap((c) => c.previews),
     ...report.orphanPreviews,
@@ -145,7 +203,7 @@ export async function runMcpServer(): Promise<void> {
     'analyze_coverage',
     {
       description:
-        'Scan the codebase for UI components and the previews that cover them: which have previews, which states/themes are missing. Read-only.',
+        'Scan the codebase for UI components and the previews that cover them, and report what each component is missing: states implied by its parameters, dark theme, large text, and localization when the project ships one. Read-only — it reports the gaps, it does not write previews.',
       inputSchema: {
         dir: z.string().default('.').describe('Project directory containing phonebook.config.json'),
       },
@@ -179,8 +237,9 @@ export async function runMcpServer(): Promise<void> {
       }
 
       const summary = summarizeCoverage(report);
+      const gaps = summarizeGaps(report);
       const hints = summarizeHints(report);
-      return textResult(`${summary}\n\n${hints}\n\n${JSON.stringify(report, null, 2)}`);
+      return textResult(`${summary}\n\n${gaps}\n\n${hints}\n\n${JSON.stringify(report, null, 2)}`);
     },
   );
 
