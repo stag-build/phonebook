@@ -40,6 +40,10 @@ function summarizeCoverage(report: CoverageReport): string {
     `With preview: ${stats.withPreview}`,
     `Without preview: ${withoutPreview}`,
     `With dark preview: ${stats.withDarkPreview}`,
+    `Components with missing previews: ${stats.componentsWithGaps}`,
+    report.extraLocales.length > 0
+      ? `Localizations beyond the development language: ${report.extraLocales.join(', ')}`
+      : 'Localizations beyond the development language: none',
     orphanCount > 0
       ? `Orphan previews (could not be matched to a component in the same file): ${orphanCount}`
       : `Orphan previews (unmatched to a component): ${orphanCount}`,
@@ -47,6 +51,50 @@ function summarizeCoverage(report: CoverageReport): string {
 }
 
 const HINT_LIST_CAP = 40;
+const GAP_LIST_CAP = 60;
+
+/**
+ * What each component is missing, which is the half `summarizeHints` cannot
+ * see: a hint needs a preview to exist before it can say anything about it.
+ *
+ * This is a to-do list for the agent reading it, ordered so the components with
+ * nothing at all come first. It reports; it never edits.
+ */
+function summarizeGaps(report: CoverageReport): string {
+  const entries = report.components.flatMap((c) =>
+    (c.gaps ?? []).map((gap) => ({ component: c, gap })),
+  );
+
+  if (entries.length === 0) {
+    return 'Missing previews (0)';
+  }
+
+  const severityRank = (rule: string, severity: string) =>
+    rule === 'no-preview' ? 0 : severity === 'warning' ? 1 : 2;
+  entries.sort(
+    (a, b) =>
+      severityRank(a.gap.rule, a.gap.severity) - severityRank(b.gap.rule, b.gap.severity) ||
+      a.component.file.localeCompare(b.component.file) ||
+      a.component.line - b.component.line,
+  );
+
+  const shown = entries.slice(0, GAP_LIST_CAP);
+  const lines = shown.map(
+    (e) =>
+      `${e.component.file}:${e.component.line} ${e.component.name} [${e.gap.rule}] ${e.gap.message} -> ${e.gap.suggestion}`,
+  );
+  const remaining = entries.length - shown.length;
+  if (remaining > 0) {
+    lines.push(`... and ${remaining} more (see JSON)`);
+  }
+
+  return [
+    `Missing previews (${entries.length})`,
+    ...lines,
+    '',
+    'Read each component before writing previews: the states above are inferred from its parameters, and only its source says which of them are worth a preview. Call get_preview_guidance for the naming convention and a template.',
+  ].join('\n');
+}
 
 function summarizeHints(report: CoverageReport): string {
   const allPreviews = [
@@ -145,7 +193,7 @@ export async function runMcpServer(): Promise<void> {
     'analyze_coverage',
     {
       description:
-        'Scan the codebase for UI components and the previews that cover them: which have previews, which states/themes are missing. Read-only.',
+        'Scan the codebase for UI components and the previews that cover them, and report what each component is missing: states implied by its parameters, dark theme, large text, and localization when the project ships one. Read-only — it reports the gaps, it does not write previews.',
       inputSchema: {
         dir: z.string().default('.').describe('Project directory containing phonebook.config.json'),
       },
@@ -179,8 +227,9 @@ export async function runMcpServer(): Promise<void> {
       }
 
       const summary = summarizeCoverage(report);
+      const gaps = summarizeGaps(report);
       const hints = summarizeHints(report);
-      return textResult(`${summary}\n\n${hints}\n\n${JSON.stringify(report, null, 2)}`);
+      return textResult(`${summary}\n\n${gaps}\n\n${hints}\n\n${JSON.stringify(report, null, 2)}`);
     },
   );
 

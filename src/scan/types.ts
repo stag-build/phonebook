@@ -5,8 +5,9 @@
  */
 
 import type { PreviewHint } from './hints.js';
+import type { ComponentProperty, CoverageGap } from './gaps.js';
 
-export type { PreviewHint };
+export type { PreviewHint, ComponentProperty, CoverageGap };
 
 export interface ScannedPreview {
   /** Preview function name (Android) or #Preview display name / "unnamed" (iOS) */
@@ -36,6 +37,11 @@ export interface ScannedComponent {
   line: number;
   /** Previews matched to this component (same file + name-prefix heuristic) */
   previews: ScannedPreview[];
+  /** Stored properties (iOS) or composable parameters (Android). What the
+   * component's states are derived from. */
+  properties?: ComponentProperty[];
+  /** Previews this component should have and doesn't. See src/scan/gaps.ts. */
+  gaps?: CoverageGap[];
 }
 
 export interface CoverageReport {
@@ -43,6 +49,9 @@ export interface CoverageReport {
   components: ScannedComponent[];
   /** Previews that could not be matched to any discovered component */
   orphanPreviews: ScannedPreview[];
+  /** Locales the project ships beyond its development language. Empty when the
+   * project is not localized, which keeps the localization gap silent there. */
+  extraLocales: string[];
   /** Totals for a quick summary */
   stats: {
     components: number;
@@ -50,6 +59,9 @@ export interface CoverageReport {
     withDarkPreview: number;
     totalPreviews: number;
     hintCount: number;
+    gapCount: number;
+    /** Components with at least one warning-severity gap. */
+    componentsWithGaps: number;
     /** Components whose only preview is themselves (the @Preview-on-the-composable
      * pattern for screen-level composables with default parameters). */
     selfPreviewed: number;

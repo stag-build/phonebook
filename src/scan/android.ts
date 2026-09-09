@@ -2,6 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { CoverageReport, ScannedComponent, ScannedPreview } from './types.js';
 import { previewHints } from './hints.js';
+import { componentGaps, type ComponentProperty, type PropertyKind } from './gaps.js';
 
 /**
  * Regex-based heuristic scanner for Jetpack Compose `@Composable` / `@Preview`
@@ -11,6 +12,8 @@ import { previewHints } from './hints.js';
 export async function scanAndroid(projectDir: string, modules: string[]): Promise<CoverageReport> {
   const components: ScannedComponent[] = [];
   const orphanPreviews: ScannedPreview[] = [];
+  const extraLocales = await detectLocales(projectDir, modules);
+  const enumTypes = new Set<string>();
 
   for (const module of modules) {
     const moduleDir = join(projectDir, ...module.split(':').filter(Boolean));
@@ -20,6 +23,8 @@ export async function scanAndroid(projectDir: string, modules: string[]): Promis
     for (const file of files) {
       const relFile = relative(projectDir, file);
       const content = await readFile(file, 'utf8');
+      for (const enumName of findEnums(content)) enumTypes.add(enumName);
+
       const { fileComponents, filePreviews } = scanKotlinFile(content, relFile);
 
       for (const comp of fileComponents) components.push(comp);
@@ -31,10 +36,25 @@ export async function scanAndroid(projectDir: string, modules: string[]): Promis
   components.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   orphanPreviews.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
 
+  for (const component of components) {
+    const gaps = componentGaps({
+      platform: 'android',
+      component: component.name,
+      properties: component.properties ?? [],
+      previewNames: component.previews.map((p) => p.displayName ?? p.name),
+      hasDarkPreview: component.previews.some((p) => p.dark),
+      previewText: component.previews.map((p) => p.annotationText ?? '').join('\n'),
+      extraLocales,
+      enumTypes: [...enumTypes],
+    });
+    if (gaps.length > 0) component.gaps = gaps;
+  }
+
   return {
     platform: 'android',
     components,
     orphanPreviews,
+    extraLocales,
     stats: computeStats(components, orphanPreviews),
   };
 }
@@ -102,11 +122,13 @@ function scanKotlinFile(
         },
       });
     } else {
+      const properties = findParameters(content, fn.funIndex);
       fileComponents.push({
         name: fn.name,
         file: relFile,
         line: fn.line,
         previews: [],
+        ...(properties.length > 0 ? { properties } : {}),
       });
     }
   }
@@ -120,11 +142,13 @@ function scanKotlinFile(
     if (wrapperTarget) {
       filePreviews.push(preview);
     } else {
+      const properties = findParameters(content, fn.funIndex);
       fileComponents.push({
         name: fn.name,
         file: relFile,
         line: fn.line,
         previews: [preview],
+        ...(properties.length > 0 ? { properties } : {}),
       });
     }
   }
@@ -148,6 +172,112 @@ function bestPrefixMatch(name: string, components: ScannedComponent[]): ScannedC
  * the block of annotations (e.g. `@Composable`, `@Preview(...)`) found within
  * roughly 5 lines above the `fun` keyword.
  */
+/**
+ * Parameters of the composable whose `fun` keyword starts at `funIndex`.
+ *
+ * A composable's parameters are its states: a `Boolean` has two values, a
+ * nullable can be absent, a `List` can be empty. `Modifier` is excluded because
+ * it configures placement rather than describing a state.
+ */
+function findParameters(content: string, funIndex: number): ComponentProperty[] {
+  const open = content.indexOf('(', funIndex);
+  if (open === -1) return [];
+  let depth = 0;
+  let close = -1;
+  const cap = Math.min(content.length, open + 4000);
+  for (let i = open; i < cap; i++) {
+    if (content[i] === '(') depth++;
+    else if (content[i] === ')') {
+      depth--;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
+  if (close === -1) return [];
+
+  const properties: ComponentProperty[] = [];
+  for (const raw of splitTopLevel(content.slice(open + 1, close))) {
+    const match = raw.match(/^\s*(?:@\w+(?:\([^)]*\))?\s+)*(\w+)\s*:\s*([^=]+)/);
+    if (!match) continue;
+    const name = match[1];
+    const type = match[2].trim();
+    if (type.startsWith('Modifier')) continue;
+    properties.push({ name, type, kind: classifyKotlinType(type) });
+  }
+  return properties;
+}
+
+/** Enum type names declared in this file. */
+function findEnums(content: string): string[] {
+  const results: string[] = [];
+  const regex = /\benum\s+class\s+([A-Z]\w*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null) results.push(match[1]);
+  return results;
+}
+
+/** Splits a parameter list on commas that are not inside brackets. */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of text) {
+    if (char === '<' || char === '(' || char === '[') depth++;
+    else if (char === '>' || char === ')' || char === ']') depth--;
+    if (char === ',' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim()) parts.push(current);
+  return parts;
+}
+
+/** Types whose values are a spectrum rather than a set of states worth previewing. */
+const SCALAR_TYPES = new Set([
+  'String', 'Int', 'Long', 'Float', 'Double', 'Char', 'Dp', 'TextUnit', 'Color',
+  'Any', 'Unit',
+]);
+
+function classifyKotlinType(type: string): PropertyKind {
+  const bare = type.replace(/\s+/g, '');
+  if (bare.endsWith('?')) return 'optional';
+  if (/^(List|Set|Array|Collection|Iterable|Map)</.test(bare)) return 'collection';
+  if (bare === 'Boolean') return 'bool';
+  if (bare.includes('->')) return 'other';
+  if (SCALAR_TYPES.has(bare)) return 'other';
+  if (/^[A-Z]\w*$/.test(bare)) return 'enum-like';
+  return 'other';
+}
+
+/**
+ * Locales the project ships, from `res/values-<code>` resource directories.
+ * The unqualified `values` directory is the default language, not a locale.
+ */
+async function detectLocales(projectDir: string, modules: string[]): Promise<string[]> {
+  const found = new Set<string>();
+  for (const module of modules) {
+    const moduleDir = join(projectDir, ...module.split(':').filter(Boolean));
+    const resDir = join(moduleDir, 'src', 'main', 'res');
+    let entries;
+    try {
+      entries = await readdir(resDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const match = entry.name.match(/^values-([a-z]{2}(?:-r[A-Z]{2})?)$/);
+      if (match) found.add(match[1].replace('-r', '-'));
+    }
+  }
+  return [...found].sort();
+}
+
 function findAnnotatedFunctions(content: string): RawFunction[] {
   const results: RawFunction[] = [];
   const funRegex = /\bfun\s+([A-Z]\w*)\s*\(/g;
@@ -218,6 +348,10 @@ function computeStats(components: ScannedComponent[], orphanPreviews: ScannedPre
     components.reduce((sum, c) => sum + c.previews.length, 0) + orphanPreviews.length;
   const allPreviews = [...components.flatMap((c) => c.previews), ...orphanPreviews];
   const hintCount = allPreviews.reduce((sum, p) => sum + (p.hints?.length ?? 0), 0);
+  const gapCount = components.reduce((sum, c) => sum + (c.gaps?.length ?? 0), 0);
+  const componentsWithGaps = components.filter((c) =>
+    (c.gaps ?? []).some((g) => g.severity === 'warning'),
+  ).length;
   const selfPreviewed = components.filter((c) =>
     c.previews.some((p) => p.name === c.name && p.line === c.line),
   ).length;
@@ -227,6 +361,8 @@ function computeStats(components: ScannedComponent[], orphanPreviews: ScannedPre
     withDarkPreview,
     totalPreviews,
     hintCount,
+    gapCount,
+    componentsWithGaps,
     selfPreviewed,
   };
 }
