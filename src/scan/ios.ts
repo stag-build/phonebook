@@ -85,8 +85,8 @@ function findPreviews(content: string, relFile: string): ScannedPreview[] {
     const displayName = nameMatch ? nameMatch[1] : undefined;
 
     const line = lineNumberAt(content, match.index);
-    const dark = isDarkPreview(content, match.index, displayName);
-    const annotationText = extractAnnotationText(content, match.index);
+    const annotationText = previewSource(content, match.index, match.index + match[0].length);
+    const dark = isDarkPreview(annotationText, displayName);
     const functionName = displayName ?? 'unnamed';
     const hints = previewHints({
       platform: 'ios',
@@ -120,31 +120,44 @@ function findPreviews(content: string, relFile: string): ScannedPreview[] {
   return results;
 }
 
-/** True when the ~10 lines following a #Preview declaration set a dark color scheme. */
-function isDarkPreview(content: string, matchIndex: number, displayName: string | undefined): boolean {
+/** True when a preview declares a dark colour scheme, by name or by modifier. */
+function isDarkPreview(source: string, displayName: string | undefined): boolean {
   if (displayName && displayName.endsWith('Dark')) return true;
-
-  const rest = content.slice(matchIndex);
-  const restLines = rest.split('\n');
-  // Stop at the next #Preview / preview-provider struct so we don't bleed into it.
-  const boundary = restLines.findIndex(
-    (l, i) => i > 0 && (/#Preview\b/.test(l) || /:\s*PreviewProvider\b/.test(l)),
-  );
-  const window = boundary === -1 ? restLines.slice(0, 11) : restLines.slice(0, Math.min(11, boundary));
-  return /\.preferredColorScheme\(\s*\.dark\s*\)/.test(window.join('\n'));
+  return /\.preferredColorScheme\(\s*\.dark\s*\)/.test(source);
 }
 
-/** The #Preview(...) line plus the following lines of its body, up to the next
- * #Preview/PreviewProvider or ~15 lines, whichever comes first. */
-function extractAnnotationText(content: string, matchIndex: number): string {
-  const rest = content.slice(matchIndex);
-  const restLines = rest.split('\n');
-  const boundary = restLines.findIndex(
-    (l, i) => i > 0 && (/#Preview\b/.test(l) || /:\s*PreviewProvider\b/.test(l)),
-  );
-  const cap = 15;
-  const limit = boundary === -1 ? cap : Math.min(cap, boundary);
-  return restLines.slice(0, limit).join('\n');
+/**
+ * The `#Preview(...)` declaration together with its body, from the macro to the
+ * brace that closes it.
+ *
+ * Reading a fixed number of lines instead — the 15-line window this replaces,
+ * and the 11-line one dark detection used — truncates exactly the previews
+ * worth reading. A long body pushes the modifiers that carry the configuration
+ * past the cap, so a preview that declares `.preferredColorScheme(.dark)` is
+ * reported as not declaring it. Seen on IceCubesApp: a 17-line preview flagged
+ * for a modifier written on its line 16, in a report that called that same
+ * preview dark — because the two checks read two different windows.
+ *
+ * Balancing braces has neither failure mode. It ends where the preview ends, so
+ * it can no more truncate a long body than bleed into the next declaration, and
+ * one reading now serves every check. `cap` is runaway protection for a file
+ * whose braces never balance — an unterminated string literal, most likely —
+ * not a window: a preview that reaches it is already unparseable.
+ */
+function previewSource(content: string, matchIndex: number, bodyFrom: number): string {
+  const cap = Math.min(content.length, matchIndex + 8000);
+  const open = content.indexOf('{', bodyFrom);
+  if (open === -1 || open >= cap) return content.slice(matchIndex, cap);
+
+  let depth = 0;
+  for (let i = open; i < cap; i++) {
+    if (content[i] === '{') depth++;
+    else if (content[i] === '}') {
+      depth--;
+      if (depth === 0) return content.slice(matchIndex, i + 1);
+    }
+  }
+  return content.slice(matchIndex, cap);
 }
 
 /**
