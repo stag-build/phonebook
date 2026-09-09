@@ -10,6 +10,7 @@ import { generateAndroid } from '../engines/android.js';
 import { generateIos } from '../engines/ios.js';
 import { buildSite } from '../site/build.js';
 import type { CoverageReport } from '../scan/types.js';
+import { changedFiles, scopeReport } from '../scan/scope.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -36,6 +37,13 @@ export function summarizeCoverage(report: CoverageReport): string {
   const withoutPreview = stats.components - stats.withPreview;
   const orphanCount = report.orphanPreviews.length;
   return [
+    // First, so a reader never mistakes a slice for the project. Every number
+    // under it counts the components in scope and no others.
+    ...(report.scope
+      ? [
+          `Scope: ${stats.components} of ${report.scope.componentsScanned} components, filtered to ${report.scope.paths.join(', ')}`,
+        ]
+      : []),
     `Components: ${stats.components}`,
     `With preview: ${stats.withPreview}`,
     `Without preview: ${withoutPreview}`,
@@ -205,12 +213,20 @@ export async function runMcpServer(): Promise<void> {
     'analyze_coverage',
     {
       description:
-        'Scan the codebase for UI components and the previews that cover them, and report what each component is missing: states implied by its parameters, dark theme, large text, and localization when the project ships one. Read-only — it reports the gaps, it does not write previews.',
+        'Scan the codebase for UI components and the previews that cover them, and report what each component is missing: states implied by its parameters, environment objects no preview supplies, dark theme, large text, and localization when the project ships one. Read-only — it reports the gaps, it does not write previews. After editing, pass changed: true (or paths) to hear only about what you touched; the whole project is always scanned either way, so the answers stay correct.',
       inputSchema: {
         dir: z.string().default('.').describe('Project directory containing phonebook.config.json'),
+        paths: z
+          .array(z.string())
+          .optional()
+          .describe('Report only components declared in these files or directories, relative to the project directory. The whole project is still scanned.'),
+        changed: z
+          .boolean()
+          .optional()
+          .describe('Report only components in files with uncommitted git changes — what you just edited. Ignored outside a git repository. Combined with paths when both are given.'),
       },
     },
-    async ({ dir }) => {
+    async ({ dir, paths, changed }) => {
       let projectDir: string;
       let platform: 'android' | 'ios';
       let modules: string[];
@@ -236,6 +252,21 @@ export async function runMcpServer(): Promise<void> {
         }
       } catch (err) {
         return errorResult(`Failed to analyze coverage: ${(err as Error).message}`);
+      }
+
+      // Scoping narrows the report, never the scan: which types are enums,
+      // what the project's preview helper supplies and which locales ship are
+      // facts about the project, and a scan of the changed files alone would
+      // get all three wrong.
+      const scope = [...(paths ?? []), ...(changed ? await changedFiles(projectDir) : [])];
+      if (scope.length > 0) {
+        const scoped = scopeReport(report, scope);
+        if (scoped.components.length === 0) {
+          return textResult(
+            `No components found in ${scope.join(', ')}. The scan found ${report.components.length} in the project; either nothing there declares a component, or the paths are not relative to ${projectDir}.`,
+          );
+        }
+        report = scoped;
       }
 
       const summary = summarizeCoverage(report);
