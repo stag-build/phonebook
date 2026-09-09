@@ -55,6 +55,13 @@ export interface CoverageReport {
   /** Locales the project ships beyond its development language. Empty when the
    * project is not localized, which keeps the localization gap silent there. */
   extraLocales: string[];
+  /** Present when the report was narrowed to a subset of the project's files.
+   * The scan still walked everything; only this report is filtered. */
+  scope?: {
+    paths: string[];
+    /** Components the scan found, before the filter. */
+    componentsScanned: number;
+  };
   /** Totals for a quick summary */
   stats: {
     components: number;
