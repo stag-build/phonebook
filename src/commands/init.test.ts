@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { detectAndroidPackage, tryWriteSnapshotClass } from './init.js';
+import { detectAndroidPackage, tryWriteSnapshotClass, IOS_SNAPSHOT_TEST_CLASS_SNIPPET } from './init.js';
+import { findSnapshotTestSubclass } from '../ios/snapshotTestClass.js';
 
 describe('detectAndroidPackage', () => {
   let dir: string;
@@ -229,5 +230,41 @@ describe('tryWriteSnapshotClass', () => {
     const result = await tryWriteSnapshotClass(dir);
     expect(result.ok).toBe(false);
     expect(result.message).toContain('only applies to iOS projects');
+  });
+});
+
+/**
+ * Xcode 26 turns on `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` for new
+ * projects, which makes every declaration MainActor-isolated unless it says
+ * otherwise. SnapshotTest's own members are nonisolated, so a subclass written
+ * without the annotation fails to compile — six errors, seen on IceCubesApp:
+ * three overridden class methods and three inherited initializers.
+ *
+ * The initializers are why this belongs on the class rather than each method.
+ * `init()`, `init(invocation:)` and `init(selector:)` appear nowhere in the
+ * source, so there is nothing to annotate individually; only class-level
+ * `nonisolated` reaches them.
+ *
+ * It costs nothing where it is not needed: `nonisolated` on a type has been
+ * legal since Swift 6.1, and Phonebook requires Xcode 26.3, so it is a no-op
+ * on a project that never enabled the setting.
+ */
+describe('the snapshot test class snippet', () => {
+  it('declares the class nonisolated', () => {
+    expect(IOS_SNAPSHOT_TEST_CLASS_SNIPPET).toMatch(/nonisolated\s+class\s+Snapshots\s*:\s*SnapshotTest\b/);
+  });
+
+  it('is still found by the subclass scanner that doctor uses', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'phonebook-snippet-'));
+    const source = IOS_SNAPSHOT_TEST_CLASS_SNIPPET.split('\n')
+      .map((line) => line.replace(/^ {5}/, ''))
+      .join('\n');
+    await writeFile(join(dir, 'Snapshots.swift'), source);
+
+    const found = await findSnapshotTestSubclass(dir);
+    expect(found?.className).toBe('Snapshots');
+    expect(found?.importsSnapshottingTests).toBe(true);
+
+    await rm(dir, { recursive: true, force: true });
   });
 });
