@@ -65,22 +65,24 @@ export interface CoverageReport {
     /** Components the scan found, before the filter. */
     componentsScanned: number;
     /**
-     * Previews outside the scope that render a component inside it. Editing a
-     * row changes what these show, and the filter would otherwise hide them.
-     * A fact to act on, not a defect.
+     * Previews outside the scope that put a component inside it on screen,
+     * directly or through the views they render. Editing a row changes what
+     * these show, and the filter would otherwise hide them. A fact to act on,
+     * not a defect.
      */
     previewsOfWhatChanged?: {
       name: string;
       file: string;
       line: number;
-      /** In-scope components this preview renders. */
+      /** In-scope components this preview reaches. Its own text may name none of them. */
       renders: string[];
     }[];
     /**
-     * Views outside the scope that render a component inside it and have no
-     * preview of their own, so nothing shows the change in that context.
-     * Whether that context is worth covering is a judgment about the product,
-     * which is why this is a question for the designer rather than a gap.
+     * Views outside the scope that render a component inside it directly and
+     * have no preview of their own, so nothing shows the change in that
+     * context. Whether that context is worth covering is a judgment about the
+     * product, which is why this is a question for the designer rather than a
+     * gap — and why it stops at one hop where `previewsOfWhatChanged` does not.
      */
     uncoveredUsesOfWhatChanged?: {
       component: string;

@@ -81,8 +81,9 @@ export function summarizeReach(report: CoverageReport): string {
   if (shown.length > 0) {
     lines.push(
       `Previews elsewhere that render what you changed (${shown.length})`,
-      'Outside the files you named, so they are not in the report above. Read each one and',
-      'decide whether it still shows the right thing.',
+      'Outside the files you named, so they are not in the report above. A preview reaches',
+      'what you changed through the views it renders, so its own body may not name it. Read',
+      'each one and decide whether it still shows the right thing.',
     );
     for (const p of shown.slice(0, REACH_LIST_CAP)) {
       lines.push(`  ${p.file}:${p.line} "${p.name}" renders ${p.renders.join(', ')}`);

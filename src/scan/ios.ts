@@ -320,6 +320,25 @@ export function rendersComponent(source: string, component: string): boolean {
   return new RegExp(`\\b${component}\\s*\\(`).test(source);
 }
 
+/**
+ * Which of `known` this source renders — the same rule as `rendersComponent`,
+ * asked once for the whole set.
+ *
+ * Reading the names out of the source and intersecting beats testing every
+ * known component against it: a project has hundreds of components and a scan
+ * asks this of every preview body, and the regex-per-name version is that
+ * product.
+ */
+export function componentsNamedIn(source: string, known: ReadonlySet<string>): string[] {
+  const named = new Set<string>();
+  const regex = /\b([A-Z]\w*)\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(source)) !== null) {
+    if (known.has(match[1])) named.add(match[1]);
+  }
+  return [...named];
+}
+
 /** Enum type names declared in this file, including indirect and raw-value enums. */
 function findEnums(content: string): string[] {
   const results: string[] = [];

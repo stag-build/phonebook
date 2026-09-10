@@ -69,6 +69,21 @@ struct RowScreen: View {
 `,
     );
 
+    // Two hops from Row: its only preview names RowPage, nothing below it.
+    await writeFile(
+      join(src, 'RowPage.swift'),
+      `import SwiftUI
+
+struct RowPage: View {
+  var body: some View { RowList() }
+}
+
+#Preview("RowPage/Default") {
+  RowPage()
+}
+`,
+    );
+
     // Touches nothing that changed.
     await writeFile(
       join(src, 'Unrelated.swift'),
@@ -112,6 +127,23 @@ struct Unrelated: View {
 
     expect(ask.map((u) => u.component)).toEqual(['RowScreen']);
     expect(ask[0].uses).toContain('Row');
+  });
+
+  it('names a preview that reaches what changed through the component it renders', async () => {
+    const shown = (await scoped()).scope?.previewsOfWhatChanged ?? [];
+
+    // "RowList/Default" says only `RowList()`. Row never appears in its text,
+    // and it is still the preview that shows the changed row on screen.
+    const viaParent = shown.find((p) => p.name === 'RowList/Default');
+    expect(viaParent).toBeDefined();
+    expect(viaParent?.renders).toContain('Row');
+  });
+
+  it('follows the graph further than one hop', async () => {
+    const shown = (await scoped()).scope?.previewsOfWhatChanged ?? [];
+
+    // RowPage renders RowList renders Row.
+    expect(shown.map((p) => p.name)).toContain('RowPage/Default');
   });
 
   it('does not ask about a view whose own preview renders it', async () => {

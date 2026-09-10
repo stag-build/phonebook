@@ -4,7 +4,7 @@ import { realpath } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import type { CoverageReport } from './types.js';
 import { computeStats } from './stats.js';
-import { rendersComponent } from './ios.js';
+import { componentsNamedIn } from './ios.js';
 
 const run = promisify(execFile);
 
@@ -54,11 +54,18 @@ export function scopeReport(report: CoverageReport, paths: string[]): CoverageRe
 }
 
 /**
- * Previews outside the scope that render something inside it.
+ * Previews outside the scope that put something inside it on screen.
  *
  * A component is rarely previewed only where it is declared: edit a row and the
  * preview that shows it may live in the list's file, which the filter drops. The
  * agent can read these and decide — they are as likely to be fine as not.
+ *
+ * Reached through the component graph rather than the preview's own text,
+ * because a preview usually names one view and shows a dozen. IceCubes made
+ * the point: changing `StatusRowDetailView` matched no preview at all, because
+ * the one preview that renders it says `StatusRowView(` and nothing else — the
+ * detail view is three levels down its body. Matching the text alone answers a
+ * question nobody asked, which is which previews mention a name.
  */
 function previewsRendering(
   report: CoverageReport,
@@ -67,15 +74,42 @@ function previewsRendering(
 ): PreviewOfWhatChanged[] {
   const found: PreviewOfWhatChanged[] = [];
   const previews = [...report.components.flatMap((c) => c.previews), ...report.orphanPreviews];
+  const known = new Set(report.components.map((c) => c.name));
+  const uses = new Map(report.components.map((c) => [c.name, c.uses ?? []]));
 
   for (const preview of previews) {
     if (inScope(preview.file)) continue;
-    const source = preview.annotationText ?? '';
-    const renders = [...changed].filter((name) => rendersComponent(source, name));
+    const renders = reachedFrom(componentsNamedIn(preview.annotationText ?? '', known), uses, changed);
     if (renders.length === 0) continue;
     found.push({ name: preview.displayName ?? preview.name, file: preview.file, line: preview.line, renders });
   }
   return found;
+}
+
+/**
+ * Which of `targets` are reachable from `seeds` by following `uses`.
+ *
+ * A view tree, walked breadth-first. `seen` is what keeps a cycle — two views
+ * that render each other under different conditions, which SwiftUI allows —
+ * from being an infinite descent.
+ */
+function reachedFrom(
+  seeds: string[],
+  uses: Map<string, string[]>,
+  targets: Set<string>,
+): string[] {
+  const hit = new Set<string>();
+  const seen = new Set<string>();
+  const queue = [...seeds];
+
+  while (queue.length > 0) {
+    const name = queue.shift()!;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    if (targets.has(name)) hit.add(name);
+    queue.push(...(uses.get(name) ?? []));
+  }
+  return [...hit];
 }
 
 /**
@@ -87,6 +121,11 @@ function previewsRendering(
  * it reaches nothing, and whether that context deserves one is a question about
  * the product — which is why this is something to ask the designer rather than
  * a gap to close.
+ *
+ * Direct users only, unlike the list above, and the asymmetry is the point. A
+ * fact can be long and still be worth reading; a question cannot. Follow the
+ * graph from a component every screen shows and the ask list becomes every
+ * screen in the app, which is not something anyone can answer.
  */
 function uncoveredUses(
   report: CoverageReport,
