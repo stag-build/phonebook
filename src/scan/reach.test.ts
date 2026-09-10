@@ -84,6 +84,32 @@ struct RowPage: View {
 `,
     );
 
+    // Has a preview, but only shows Row behind a condition the preview never sets.
+    // This is IceCubes' StatusRowView: previewed in the timeline context, where the
+    // detail view it renders when focused never appears.
+    await writeFile(
+      join(src, 'RowToggle.swift'),
+      `import SwiftUI
+
+struct RowToggle: View {
+  @Environment(\\.isFocused) private var isFocused
+
+  var body: some View {
+    VStack {
+      Text("always here")
+      if isFocused {
+        Row(title: "only when focused")
+      }
+    }
+  }
+}
+
+#Preview("RowToggle/Default") {
+  RowToggle()
+}
+`,
+    );
+
     // Touches nothing that changed.
     await writeFile(
       join(src, 'Unrelated.swift'),
@@ -125,8 +151,9 @@ struct Unrelated: View {
   it('asks about a view that uses what changed and has no preview', async () => {
     const ask = (await scoped()).scope?.uncoveredUsesOfWhatChanged ?? [];
 
-    expect(ask.map((u) => u.component)).toEqual(['RowScreen']);
-    expect(ask[0].uses).toContain('Row');
+    const screen = ask.find((u) => u.component === 'RowScreen');
+    expect(screen?.uses).toContain('Row');
+    expect(screen?.reason).toBe('no-preview');
   });
 
   it('names a preview that reaches what changed through the component it renders', async () => {
@@ -144,6 +171,25 @@ struct Unrelated: View {
 
     // RowPage renders RowList renders Row.
     expect(shown.map((p) => p.name)).toContain('RowPage/Default');
+  });
+
+  it('does not claim a preview shows what it only reaches behind a condition', async () => {
+    const shown = (await scoped()).scope?.previewsOfWhatChanged ?? [];
+
+    // The same preview the ask list names. Claiming it renders Row and asking
+    // whether Row is shown anywhere would be two answers to one question.
+    expect(shown.map((p) => p.name)).not.toContain('RowToggle/Default');
+  });
+
+  it('asks about a view whose preview only renders what changed behind a condition', async () => {
+    const ask = (await scoped()).scope?.uncoveredUsesOfWhatChanged ?? [];
+
+    // RowToggle has a preview, and that preview does not set the condition that
+    // brings Row on screen. Having a preview is not the same as showing this.
+    const guarded = ask.find((u) => u.component === 'RowToggle');
+    expect(guarded).toBeDefined();
+    expect(guarded?.uses).toContain('Row');
+    expect(guarded?.reason).toBe('conditional');
   });
 
   it('does not ask about a view whose own preview renders it', async () => {

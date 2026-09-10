@@ -46,6 +46,8 @@ export async function scanIos(projectDir: string): Promise<CoverageReport> {
     if (body === undefined) continue;
     const uses = [...names].filter((n) => n !== component.name && rendersComponent(body, n));
     if (uses.length > 0) component.uses = uses;
+    const guarded = uses.filter((n) => onlyRendersConditionally(body, n));
+    if (guarded.length > 0) component.conditionalUses = guarded;
   }
 
   components.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -318,6 +320,52 @@ function balancedArgument(source: string, openIndex: number): string {
  */
 export function rendersComponent(source: string, component: string): boolean {
   return new RegExp(`\\b${component}\\s*\\(`).test(source);
+}
+
+/**
+ * True when every place `source` renders `component` sits inside an `if`,
+ * `switch` or `guard` — so whether it appears depends on state the caller sets.
+ *
+ * This is what separates a parent that shows a child from a parent that might.
+ * IceCubes' StatusRowView renders StatusRowDetailView only `if isFocused`, and
+ * its one preview builds a timeline row, where nothing is focused: the preview
+ * exists, and the detail view is not in it. Treating that as coverage is how a
+ * redesigned view reaches no screenshot and no one is told.
+ *
+ * The brace stack is the whole trick — a frame remembers whether the text that
+ * opened it read as a condition. No Swift is evaluated and none needs to be:
+ * the question is whether a render is guarded, not which way the guard goes.
+ */
+export function onlyRendersConditionally(source: string, component: string): boolean {
+  const guarded = /(^|[^\w.])(if|guard|switch)[\s(]/;
+  const stack: boolean[] = [];
+  let segment = '';
+  let found = false;
+
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (char === '{') {
+      stack.push(guarded.test(segment));
+      segment = '';
+      continue;
+    }
+    if (char === '}') {
+      stack.pop();
+      segment = '';
+      continue;
+    }
+    segment += char;
+
+    // The name has just been completed by an opening parenthesis.
+    if (char === '(' && segment.trimEnd().endsWith(`${component}(`)) {
+      const name = segment.trimEnd().slice(0, -1);
+      if (name.endsWith(component) && !/\w/.test(name.slice(0, -component.length).slice(-1))) {
+        found = true;
+        if (!stack.some(Boolean)) return false;
+      }
+    }
+  }
+  return found;
 }
 
 /**

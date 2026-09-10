@@ -94,13 +94,13 @@ export function summarizeReach(report: CoverageReport): string {
   if (ask.length > 0) {
     if (lines.length > 0) lines.push('');
     lines.push(
-      `Views that use what you changed and have no preview (${ask.length})`,
-      'Nothing renders these, so your change never reaches a screenshot in that context.',
-      'Whether it should is the designer\'s call, not yours: end your turn by asking, with',
-      'these as the options.',
+      `Views that show what you changed, where no preview does (${ask.length})`,
+      'Your change never reaches a screenshot in these contexts. Whether it should is the',
+      'designer\'s call, not yours: end your turn by asking, with these as the options.',
     );
     for (const u of ask.slice(0, REACH_LIST_CAP)) {
-      lines.push(`  ${u.file}:${u.line} ${u.component} uses ${u.uses.join(', ')}`);
+      const why = u.reason === 'conditional' ? 'only inside an if, which its preview may not enter' : 'and has no preview';
+      lines.push(`  ${u.file}:${u.line} ${u.component} renders ${u.uses.join(', ')} ${why}`);
     }
     if (ask.length > REACH_LIST_CAP) lines.push(`  ... and ${ask.length - REACH_LIST_CAP} more (see JSON)`);
   }

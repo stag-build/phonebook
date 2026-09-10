@@ -75,7 +75,15 @@ function previewsRendering(
   const found: PreviewOfWhatChanged[] = [];
   const previews = [...report.components.flatMap((c) => c.previews), ...report.orphanPreviews];
   const known = new Set(report.components.map((c) => c.name));
-  const uses = new Map(report.components.map((c) => [c.name, c.uses ?? []]));
+  // Guarded children are left to the ask list below. A preview that reaches
+  // something only through an `if` has not been shown to render it, and saying
+  // both here and there would be two answers to one question.
+  const uses = new Map(
+    report.components.map((c) => {
+      const guarded = new Set(c.conditionalUses ?? []);
+      return [c.name, (c.uses ?? []).filter((n) => !guarded.has(n))] as const;
+    }),
+  );
 
   for (const preview of previews) {
     if (inScope(preview.file)) continue;
@@ -95,7 +103,7 @@ function previewsRendering(
  */
 function reachedFrom(
   seeds: string[],
-  uses: Map<string, string[]>,
+  uses: ReadonlyMap<string, readonly string[]>,
   targets: Set<string>,
 ): string[] {
   const hit = new Set<string>();
@@ -116,11 +124,16 @@ function reachedFrom(
  * Views outside the scope that render something inside it and have no preview
  * of their own.
  *
- * Having any preview is enough to be left alone: rendering the parent renders
- * its children, so the change does reach a screenshot. With no preview at all
- * it reaches nothing, and whether that context deserves one is a question about
- * the product — which is why this is something to ask the designer rather than
- * a gap to close.
+ * Two ways to end up here, and the second is the one that took two runs against
+ * IceCubes to see. A view with no preview at all shows the change nowhere. A
+ * view that renders it inside an `if` has a preview that may show nothing of it
+ * either — StatusRowView is previewed as a timeline row, and the detail view it
+ * was changed to render only appears when focused. "Has a preview" answered the
+ * wrong question, and answered it yes.
+ *
+ * Whether either context deserves a preview is a judgment about the product,
+ * which is why this is something to ask the designer rather than a gap to
+ * close.
  *
  * Direct users only, unlike the list above, and the asymmetry is the point. A
  * fact can be long and still be worth reading; a question cannot. Follow the
@@ -135,10 +148,20 @@ function uncoveredUses(
   const found: UncoveredUse[] = [];
 
   for (const component of report.components) {
-    if (inScope(component.file) || component.previews.length > 0) continue;
+    if (inScope(component.file)) continue;
     const uses = (component.uses ?? []).filter((name) => changed.has(name));
     if (uses.length === 0) continue;
-    found.push({ component: component.name, file: component.file, line: component.line, uses });
+
+    if (component.previews.length === 0) {
+      found.push({ component: component.name, file: component.file, line: component.line, uses, reason: 'no-preview' });
+      continue;
+    }
+
+    // It has a preview. That only settles the question for what it shows
+    // unconditionally.
+    const guarded = uses.filter((name) => (component.conditionalUses ?? []).includes(name));
+    if (guarded.length === 0) continue;
+    found.push({ component: component.name, file: component.file, line: component.line, uses: guarded, reason: 'conditional' });
   }
   return found;
 }

@@ -46,6 +46,11 @@ export interface ScannedComponent {
   /** Other discovered components this one renders in its body (iOS). What makes
    * it possible to say who else is affected when a component changes. */
   uses?: string[];
+  /**
+   * The subset of `uses` this component renders only inside an `if`, `switch`
+   * or `guard`. Its own preview may never reach these.
+   */
+  conditionalUses?: string[];
   /** Previews this component should have and doesn't. See src/scan/gaps.ts. */
   gaps?: CoverageGap[];
 }
@@ -90,6 +95,8 @@ export interface CoverageReport {
       line: number;
       /** In-scope components it renders. */
       uses: string[];
+      /** Why nothing shows the change here. */
+      reason: 'no-preview' | 'conditional';
     }[];
   };
   /** Totals for a quick summary */
