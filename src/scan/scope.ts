@@ -4,8 +4,13 @@ import { realpath } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import type { CoverageReport } from './types.js';
 import { computeStats } from './stats.js';
+import { rendersComponent } from './ios.js';
 
 const run = promisify(execFile);
+
+type Scope = NonNullable<CoverageReport['scope']>;
+type PreviewOfWhatChanged = NonNullable<Scope['previewsOfWhatChanged']>[number];
+type UncoveredUse = NonNullable<Scope['uncoveredUsesOfWhatChanged']>[number];
 
 /**
  * Narrow a finished report to the components declared in `paths`.
@@ -25,19 +30,78 @@ export function scopeReport(report: CoverageReport, paths: string[]): CoverageRe
   if (paths.length === 0) return report;
 
   const wanted = paths.map((p) => p.replace(/^\.\//, '').replace(/\/+$/, ''));
-  const matches = (file: string) =>
-    wanted.some((p) => file === p || file.startsWith(`${p}/`));
+  const matches = (file: string) => wanted.some((p) => file === p || file.startsWith(`${p}/`));
 
   const components = report.components.filter((c) => matches(c.file));
   const orphanPreviews = report.orphanPreviews.filter((p) => matches(p.file));
+
+  const changed = new Set(components.map((c) => c.name));
+  const previewsOfWhatChanged = previewsRendering(report, changed, matches);
+  const uncoveredUsesOfWhatChanged = uncoveredUses(report, changed, matches);
 
   return {
     ...report,
     components,
     orphanPreviews,
     stats: computeStats(components, orphanPreviews),
-    scope: { paths: wanted, componentsScanned: report.components.length },
+    scope: {
+      paths: wanted,
+      componentsScanned: report.components.length,
+      ...(previewsOfWhatChanged.length > 0 ? { previewsOfWhatChanged } : {}),
+      ...(uncoveredUsesOfWhatChanged.length > 0 ? { uncoveredUsesOfWhatChanged } : {}),
+    },
   };
+}
+
+/**
+ * Previews outside the scope that render something inside it.
+ *
+ * A component is rarely previewed only where it is declared: edit a row and the
+ * preview that shows it may live in the list's file, which the filter drops. The
+ * agent can read these and decide — they are as likely to be fine as not.
+ */
+function previewsRendering(
+  report: CoverageReport,
+  changed: Set<string>,
+  inScope: (file: string) => boolean,
+): PreviewOfWhatChanged[] {
+  const found: PreviewOfWhatChanged[] = [];
+  const previews = [...report.components.flatMap((c) => c.previews), ...report.orphanPreviews];
+
+  for (const preview of previews) {
+    if (inScope(preview.file)) continue;
+    const source = preview.annotationText ?? '';
+    const renders = [...changed].filter((name) => rendersComponent(source, name));
+    if (renders.length === 0) continue;
+    found.push({ name: preview.displayName ?? preview.name, file: preview.file, line: preview.line, renders });
+  }
+  return found;
+}
+
+/**
+ * Views outside the scope that render something inside it and have no preview
+ * of their own.
+ *
+ * Having any preview is enough to be left alone: rendering the parent renders
+ * its children, so the change does reach a screenshot. With no preview at all
+ * it reaches nothing, and whether that context deserves one is a question about
+ * the product — which is why this is something to ask the designer rather than
+ * a gap to close.
+ */
+function uncoveredUses(
+  report: CoverageReport,
+  changed: Set<string>,
+  inScope: (file: string) => boolean,
+): UncoveredUse[] {
+  const found: UncoveredUse[] = [];
+
+  for (const component of report.components) {
+    if (inScope(component.file) || component.previews.length > 0) continue;
+    const uses = (component.uses ?? []).filter((name) => changed.has(name));
+    if (uses.length === 0) continue;
+    found.push({ component: component.name, file: component.file, line: component.line, uses });
+  }
+  return found;
 }
 
 /**

@@ -21,6 +21,10 @@ export async function scanIos(projectDir: string): Promise<CoverageReport> {
   // function that says what that supplies lives in another, so this cannot be
   // resolved a file at a time.
   const envHelpers = new Map<string, string>();
+  // Component bodies, kept only for the duration of the scan: which components
+  // a body renders cannot be answered until every component name is known, and
+  // the bodies themselves are far too large to put in a report.
+  const bodies = new Map<string, string>();
 
   for (const file of files) {
     const relFile = relative(projectDir, file);
@@ -29,11 +33,19 @@ export async function scanIos(projectDir: string): Promise<CoverageReport> {
     for (const enumName of findEnums(content)) enumTypes.add(enumName);
     for (const [name, provided] of findEnvironmentHelpers(content)) envHelpers.set(name, provided);
 
-    const fileComponents = findViewStructs(content, relFile);
+    const fileComponents = findViewStructs(content, relFile, bodies);
     const filePreviews = findPreviews(content, relFile);
 
     for (const comp of fileComponents) components.push(comp);
     matchPreviewsToComponents(filePreviews, fileComponents, orphanPreviews);
+  }
+
+  const names = new Set(components.map((c) => c.name));
+  for (const component of components) {
+    const body = bodies.get(component.name);
+    if (body === undefined) continue;
+    const uses = [...names].filter((n) => n !== component.name && rendersComponent(body, n));
+    if (uses.length > 0) component.uses = uses;
   }
 
   components.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -67,7 +79,11 @@ export async function scanIos(projectDir: string): Promise<CoverageReport> {
   };
 }
 
-function findViewStructs(content: string, relFile: string): ScannedComponent[] {
+function findViewStructs(
+  content: string,
+  relFile: string,
+  bodies: Map<string, string>,
+): ScannedComponent[] {
   const results: ScannedComponent[] = [];
   const regex = /(?:struct|final class)\s+([A-Z]\w*)\s*:\s*[^{]*\bView\b/g;
   let match: RegExpExecArray | null;
@@ -75,6 +91,7 @@ function findViewStructs(content: string, relFile: string): ScannedComponent[] {
     const body = structBody(content, regex.lastIndex);
     const properties = findStoredProperties(body);
     const environmentTypes = findEnvironmentReads(body);
+    bodies.set(match[1], body);
     results.push({
       name: match[1],
       file: relFile,
@@ -287,6 +304,20 @@ function balancedArgument(source: string, openIndex: number): string {
     }
   }
   return source.slice(openIndex + 1);
+}
+
+/**
+ * True when `source` renders `component` — the name followed by an opening
+ * parenthesis, which is how a SwiftUI view is instantiated.
+ *
+ * A bare mention is not a render: `StatusRowView.Context` names the type
+ * without showing anything, and a comment saying "like AvatarView" shows even
+ * less. Requiring the parenthesis costs the zero-argument spelling nothing —
+ * `RowList()` still matches — and keeps the answer to something a reader
+ * would agree with.
+ */
+export function rendersComponent(source: string, component: string): boolean {
+  return new RegExp(`\\b${component}\\s*\\(`).test(source);
 }
 
 /** Enum type names declared in this file, including indirect and raw-value enums. */

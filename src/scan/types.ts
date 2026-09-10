@@ -43,6 +43,9 @@ export interface ScannedComponent {
   /** Types read via `@Environment(X.self)` (iOS). An unsatisfied one traps at
    * render, so a preview that omits it is broken rather than incomplete. */
   environmentTypes?: string[];
+  /** Other discovered components this one renders in its body (iOS). What makes
+   * it possible to say who else is affected when a component changes. */
+  uses?: string[];
   /** Previews this component should have and doesn't. See src/scan/gaps.ts. */
   gaps?: CoverageGap[];
 }
@@ -61,6 +64,31 @@ export interface CoverageReport {
     paths: string[];
     /** Components the scan found, before the filter. */
     componentsScanned: number;
+    /**
+     * Previews outside the scope that render a component inside it. Editing a
+     * row changes what these show, and the filter would otherwise hide them.
+     * A fact to act on, not a defect.
+     */
+    previewsOfWhatChanged?: {
+      name: string;
+      file: string;
+      line: number;
+      /** In-scope components this preview renders. */
+      renders: string[];
+    }[];
+    /**
+     * Views outside the scope that render a component inside it and have no
+     * preview of their own, so nothing shows the change in that context.
+     * Whether that context is worth covering is a judgment about the product,
+     * which is why this is a question for the designer rather than a gap.
+     */
+    uncoveredUsesOfWhatChanged?: {
+      component: string;
+      file: string;
+      line: number;
+      /** In-scope components it renders. */
+      uses: string[];
+    }[];
   };
   /** Totals for a quick summary */
   stats: {

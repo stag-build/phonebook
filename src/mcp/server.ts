@@ -58,6 +58,55 @@ export function summarizeCoverage(report: CoverageReport): string {
   ].join('\n');
 }
 
+const REACH_LIST_CAP = 25;
+
+/**
+ * What a scoped report would otherwise hide: previews and views outside the
+ * scope that show a component inside it.
+ *
+ * Kept apart from the gaps above, and worded differently, because they are not
+ * the same kind of claim. A gap is a defect with a fix. The first list here is
+ * a fact — these previews show what you changed, and only their source says
+ * whether that matters. The second is a question: nothing renders that context
+ * at all, and whether it deserves a preview is a judgment about the product
+ * rather than about the code.
+ */
+export function summarizeReach(report: CoverageReport): string {
+  const shown = report.scope?.previewsOfWhatChanged ?? [];
+  const ask = report.scope?.uncoveredUsesOfWhatChanged ?? [];
+  if (shown.length === 0 && ask.length === 0) return '';
+
+  const lines: string[] = [];
+
+  if (shown.length > 0) {
+    lines.push(
+      `Previews elsewhere that render what you changed (${shown.length})`,
+      'Outside the files you named, so they are not in the report above. Read each one and',
+      'decide whether it still shows the right thing.',
+    );
+    for (const p of shown.slice(0, REACH_LIST_CAP)) {
+      lines.push(`  ${p.file}:${p.line} "${p.name}" renders ${p.renders.join(', ')}`);
+    }
+    if (shown.length > REACH_LIST_CAP) lines.push(`  ... and ${shown.length - REACH_LIST_CAP} more (see JSON)`);
+  }
+
+  if (ask.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push(
+      `Views that use what you changed and have no preview (${ask.length})`,
+      'Nothing renders these, so your change never reaches a screenshot in that context.',
+      'Whether it should is the designer\'s call, not yours: end your turn by asking, with',
+      'these as the options.',
+    );
+    for (const u of ask.slice(0, REACH_LIST_CAP)) {
+      lines.push(`  ${u.file}:${u.line} ${u.component} uses ${u.uses.join(', ')}`);
+    }
+    if (ask.length > REACH_LIST_CAP) lines.push(`  ... and ${ask.length - REACH_LIST_CAP} more (see JSON)`);
+  }
+
+  return lines.join('\n');
+}
+
 const HINT_LIST_CAP = 40;
 const GAP_COMPONENT_CAP = 60;
 
@@ -272,7 +321,10 @@ export async function runMcpServer(): Promise<void> {
       const summary = summarizeCoverage(report);
       const gaps = summarizeGaps(report);
       const hints = summarizeHints(report);
-      return textResult(`${summary}\n\n${gaps}\n\n${hints}\n\n${JSON.stringify(report, null, 2)}`);
+      const reach = summarizeReach(report);
+      return textResult(
+        [summary, gaps, hints, reach, JSON.stringify(report, null, 2)].filter((s) => s !== '').join('\n\n'),
+      );
     },
   );
 
