@@ -80,7 +80,7 @@ function previewsRendering(
   // both here and there would be two answers to one question.
   const uses = new Map(
     report.components.map((c) => {
-      const guarded = new Set(c.conditionalUses ?? []);
+      const guarded = new Set((c.conditionalUses ?? []).map((u) => u.name));
       return [c.name, (c.uses ?? []).filter((n) => !guarded.has(n))] as const;
     }),
   );
@@ -159,9 +159,25 @@ function uncoveredUses(
 
     // It has a preview. That only settles the question for what it shows
     // unconditionally.
-    const guarded = uses.filter((name) => (component.conditionalUses ?? []).includes(name));
+    const guarded = (component.conditionalUses ?? []).filter((u) => changed.has(u.name));
     if (guarded.length === 0) continue;
-    found.push({ component: component.name, file: component.file, line: component.line, uses: guarded, reason: 'conditional' });
+
+    // The first guarded render carries the line and the condition. Listing one
+    // condition per child would make the question longer than the answer, and
+    // the reader opens the file either way.
+    found.push({
+      component: component.name,
+      file: component.file,
+      line: guarded[0].line,
+      uses: guarded.map((u) => u.name),
+      reason: 'conditional',
+      guard: guarded[0].guard,
+      previews: component.previews.map((p) => ({
+        name: p.displayName ?? p.name,
+        file: p.file,
+        line: p.line,
+      })),
+    });
   }
   return found;
 }

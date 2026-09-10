@@ -192,6 +192,48 @@ struct Unrelated: View {
     expect(guarded?.reason).toBe('conditional');
   });
 
+  /**
+   * The three tests below are one finding split in three. Against IceCubes this
+   * question named the struct's declaration line and called the condition "an
+   * if", and the agent did nothing with it across two runs: the line it was
+   * handed was a `struct` header, which teaches nothing, and "an if" does not
+   * say what to set. A question the reader cannot act on is not a question.
+   */
+  it('names the condition that decides whether the render happens', async () => {
+    const ask = (await scoped()).scope?.uncoveredUsesOfWhatChanged ?? [];
+
+    const guarded = ask.find((u) => u.component === 'RowToggle');
+    expect(guarded?.guard).toBe('if isFocused');
+  });
+
+  it('points at the guarded render, not the struct that contains it', async () => {
+    const ask = (await scoped()).scope?.uncoveredUsesOfWhatChanged ?? [];
+
+    // RowToggle is declared on line 3 and renders Row on line 10. Opening the
+    // declaration shows a property wrapper; opening the render shows the guard.
+    const guarded = ask.find((u) => u.component === 'RowToggle');
+    expect(guarded?.line).toBe(10);
+  });
+
+  it('names the preview that exists and does not enter the branch', async () => {
+    const ask = (await scoped()).scope?.uncoveredUsesOfWhatChanged ?? [];
+
+    // The whole point of this entry is that a preview exists. Saying which one
+    // is what turns the question into an edit.
+    const guarded = ask.find((u) => u.component === 'RowToggle');
+    expect(guarded?.previews).toEqual([
+      { name: 'RowToggle/Default', file: 'Sources/RowToggle.swift', line: 16 },
+    ]);
+  });
+
+  it('leaves a view with no preview without a condition or a preview list', async () => {
+    const ask = (await scoped()).scope?.uncoveredUsesOfWhatChanged ?? [];
+
+    const screen = ask.find((u) => u.component === 'RowScreen');
+    expect(screen?.guard).toBeUndefined();
+    expect(screen?.previews).toBeUndefined();
+  });
+
   it('does not ask about a view whose own preview renders it', async () => {
     const ask = (await scoped()).scope?.uncoveredUsesOfWhatChanged ?? [];
     // RowList uses Row, but RowList has a preview, so rendering it renders Row.

@@ -30,6 +30,23 @@ export interface ScannedPreview {
   hints?: PreviewHint[];
 }
 
+/**
+ * A component rendered only behind a condition, and enough about the render to
+ * go and look at it.
+ *
+ * The condition text is the payload. "Renders it inside an if" names a shape;
+ * `if isFocused, !isCompact` names the state a preview would have to set, which
+ * is the difference between a question and a chore.
+ */
+export interface ConditionalUse {
+  /** The component rendered behind the condition. */
+  name: string;
+  /** The condition as written, whitespace collapsed. */
+  guard: string;
+  /** Line of the guarded render, in the file that declares the parent. */
+  line: number;
+}
+
 export interface ScannedComponent {
   /** Composable function name (Android) or View struct name (iOS) */
   name: string;
@@ -50,7 +67,7 @@ export interface ScannedComponent {
    * The subset of `uses` this component renders only inside an `if`, `switch`
    * or `guard`. Its own preview may never reach these.
    */
-  conditionalUses?: string[];
+  conditionalUses?: ConditionalUse[];
   /** Previews this component should have and doesn't. See src/scan/gaps.ts. */
   gaps?: CoverageGap[];
 }
@@ -92,11 +109,18 @@ export interface CoverageReport {
     uncoveredUsesOfWhatChanged?: {
       component: string;
       file: string;
+      /** The guarded render when `reason` is `conditional`, so the line points at
+       * the branch in question; the component's declaration otherwise. */
       line: number;
       /** In-scope components it renders. */
       uses: string[];
       /** Why nothing shows the change here. */
       reason: 'no-preview' | 'conditional';
+      /** `conditional` only: the condition a preview would have to satisfy. */
+      guard?: string;
+      /** `conditional` only: the previews that exist and do not enter the branch.
+       * Naming them is what makes this answerable — the reader opens one. */
+      previews?: { name: string; file: string; line: number }[];
     }[];
   };
   /** Totals for a quick summary */

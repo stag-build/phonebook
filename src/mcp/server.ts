@@ -99,8 +99,21 @@ export function summarizeReach(report: CoverageReport): string {
       'designer\'s call, not yours: end your turn by asking, with these as the options.',
     );
     for (const u of ask.slice(0, REACH_LIST_CAP)) {
-      const why = u.reason === 'conditional' ? 'only inside an if, which its preview may not enter' : 'and has no preview';
-      lines.push(`  ${u.file}:${u.line} ${u.component} renders ${u.uses.join(', ')} ${why}`);
+      if (u.reason === 'no-preview') {
+        lines.push(`  ${u.file}:${u.line} ${u.component} renders ${u.uses.join(', ')} and has no preview`);
+        continue;
+      }
+      // Two lines, because a condition the reader cannot act on is not worth the
+      // one. The first says what hides the render, the second says which preview
+      // could stop hiding it.
+      lines.push(`  ${u.file}:${u.line} ${u.component} renders ${u.uses.join(', ')} only inside \`${u.guard}\``);
+      const previews = u.previews ?? [];
+      const where = previews.map((p) => `${p.file}:${p.line}`).join(', ');
+      lines.push(
+        previews.length === 1
+          ? `    its preview (${where}) does not set that`
+          : `    none of its ${previews.length} previews set that (${where})`,
+      );
     }
     if (ask.length > REACH_LIST_CAP) lines.push(`  ... and ${ask.length - REACH_LIST_CAP} more (see JSON)`);
   }

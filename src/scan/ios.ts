@@ -46,7 +46,12 @@ export async function scanIos(projectDir: string): Promise<CoverageReport> {
     if (body === undefined) continue;
     const uses = [...names].filter((n) => n !== component.name && rendersComponent(body, n));
     if (uses.length > 0) component.uses = uses;
-    const guarded = uses.filter((n) => onlyRendersConditionally(body, n));
+    // The body starts at the struct's opening brace, so its line 0 is the line
+    // the component was declared on and the offset carries the rest.
+    const guarded = uses.flatMap((name) => {
+      const at = onlyRendersConditionally(body, name);
+      return at === undefined ? [] : [{ name, guard: at.guard, line: component.line + at.line }];
+    });
     if (guarded.length > 0) component.conditionalUses = guarded;
   }
 
@@ -323,8 +328,8 @@ export function rendersComponent(source: string, component: string): boolean {
 }
 
 /**
- * True when every place `source` renders `component` sits inside an `if`,
- * `switch` or `guard` — so whether it appears depends on state the caller sets.
+ * Where `source` renders `component` behind a condition, when every place it
+ * does is behind one — so whether it appears depends on state the caller sets.
  *
  * This is what separates a parent that shows a child from a parent that might.
  * IceCubes' StatusRowView renders StatusRowDetailView only `if isFocused`, and
@@ -332,20 +337,29 @@ export function rendersComponent(source: string, component: string): boolean {
  * exists, and the detail view is not in it. Treating that as coverage is how a
  * redesigned view reaches no screenshot and no one is told.
  *
- * The brace stack is the whole trick — a frame remembers whether the text that
- * opened it read as a condition. No Swift is evaluated and none needs to be:
- * the question is whether a render is guarded, not which way the guard goes.
+ * The brace stack is the whole trick — a frame remembers the text that opened
+ * it, and that text is the condition when it reads as one. No Swift is
+ * evaluated and none needs to be: the question is whether a render is guarded
+ * and behind what, not which way the guard goes.
+ *
+ * Returns the innermost condition around the first guarded render. A component
+ * that renders the same child behind two different conditions is rare, and the
+ * answer to the first is the answer to both: nothing shows it.
  */
-export function onlyRendersConditionally(source: string, component: string): boolean {
-  const guarded = /(^|[^\w.])(if|guard|switch)[\s(]/;
-  const stack: boolean[] = [];
+export function onlyRendersConditionally(
+  source: string,
+  component: string,
+): { guard: string; line: number } | undefined {
+  const stack: (string | undefined)[] = [];
   let segment = '';
-  let found = false;
+  let line = 0;
+  let guarded: { guard: string; line: number } | undefined;
 
   for (let i = 0; i < source.length; i++) {
     const char = source[i];
+    if (char === '\n') line++;
     if (char === '{') {
-      stack.push(guarded.test(segment));
+      stack.push(conditionOpening(segment));
       segment = '';
       continue;
     }
@@ -360,12 +374,34 @@ export function onlyRendersConditionally(source: string, component: string): boo
     if (char === '(' && segment.trimEnd().endsWith(`${component}(`)) {
       const name = segment.trimEnd().slice(0, -1);
       if (name.endsWith(component) && !/\w/.test(name.slice(0, -component.length).slice(-1))) {
-        found = true;
-        if (!stack.some(Boolean)) return false;
+        const condition = [...stack].reverse().find((c) => c !== undefined);
+        // One unguarded render settles it: the parent does show the child.
+        if (condition === undefined) return undefined;
+        guarded ??= { guard: condition, line };
       }
     }
   }
-  return found;
+  return guarded;
+}
+
+/**
+ * The condition in the text that opened a brace, or undefined when it opened
+ * something else.
+ *
+ * Takes the last condition keyword in the segment rather than the first: the
+ * text since the previous brace can carry a whole statement before the one that
+ * opens this frame.
+ */
+function conditionOpening(segment: string): string | undefined {
+  const opener = /(^|[^\w.])(if|guard|switch)[\s(]/g;
+  let last: RegExpExecArray | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(segment)) !== null) last = match;
+  if (last === null) return undefined;
+  return segment
+    .slice(last.index + last[1].length)
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
