@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import type { CoverageReport, ScannedComponent, ScannedPreview } from './types.js';
 import { previewHints } from './hints.js';
 import { componentGaps, type ComponentProperty, type PropertyKind } from './gaps.js';
+import { computeStats } from './stats.js';
 
 /**
  * Regex-based heuristic scanner for Jetpack Compose `@Composable` / `@Preview`
@@ -341,31 +342,6 @@ function matchPreviewsToComponents(
   }
 }
 
-function computeStats(components: ScannedComponent[], orphanPreviews: ScannedPreview[]) {
-  const withPreview = components.filter((c) => c.previews.length > 0).length;
-  const withDarkPreview = components.filter((c) => c.previews.some((p) => p.dark)).length;
-  const totalPreviews =
-    components.reduce((sum, c) => sum + c.previews.length, 0) + orphanPreviews.length;
-  const allPreviews = [...components.flatMap((c) => c.previews), ...orphanPreviews];
-  const hintCount = allPreviews.reduce((sum, p) => sum + (p.hints?.length ?? 0), 0);
-  const gapCount = components.reduce((sum, c) => sum + (c.gaps?.length ?? 0), 0);
-  const componentsWithGaps = components.filter((c) =>
-    (c.gaps ?? []).some((g) => g.severity === 'warning'),
-  ).length;
-  const selfPreviewed = components.filter((c) =>
-    c.previews.some((p) => p.name === c.name && p.line === c.line),
-  ).length;
-  return {
-    components: components.length,
-    withPreview,
-    withDarkPreview,
-    totalPreviews,
-    hintCount,
-    gapCount,
-    componentsWithGaps,
-    selfPreviewed,
-  };
-}
 
 async function walkKotlinFiles(dir: string): Promise<string[]> {
   const results: string[] = [];
