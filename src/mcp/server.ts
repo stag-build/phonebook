@@ -7,7 +7,8 @@ import { z } from 'zod';
 import { loadConfig } from '../config.js';
 import { collectDoctorChecks } from '../commands/doctor.js';
 import { generateAndroid } from '../engines/android.js';
-import { generateIos } from '../engines/ios.js';
+import { generateIos, IncompleteRenderError } from '../engines/ios.js';
+import { explainFailedPreviews, summarizeIncompleteRender } from '../ios/unrendered.js';
 import { buildSite } from '../site/build.js';
 import type { CoverageReport } from '../scan/types.js';
 import { changedFiles, scopeReport } from '../scan/scope.js';
@@ -30,6 +31,29 @@ function errorResult(message: string) {
 
 function textResult(text: string) {
   return { content: [{ type: 'text' as const, text }] };
+}
+
+/**
+ * The crash report for a render that did not finish. Only this path needs the
+ * source: the test names say which file crashed, and the scan says which
+ * previews that file declares. Without a scan the containers still say where to
+ * look.
+ */
+async function explainIncompleteRender(error: IncompleteRenderError, projectDir: string): Promise<string> {
+  let explained = [...new Set(error.failedPreviews)].map((container) => ({
+    container,
+    failures: error.failedPreviews.filter((f) => f === container).length,
+    unrendered: [] as { file: string; line: number; name: string }[],
+  }));
+  try {
+    const { scanIos } = await import('../scan/ios.js');
+    const report = await scanIos(projectDir);
+    const previews = [...report.components.flatMap((c) => c.previews), ...report.orphanPreviews];
+    explained = explainFailedPreviews(error.failedPreviews, error.manifest.entries, previews);
+  } catch {
+    // The containers alone still say where to look.
+  }
+  return summarizeIncompleteRender(error, explained);
 }
 
 export function summarizeCoverage(report: CoverageReport): string {
@@ -382,7 +406,8 @@ export async function runMcpServer(): Promise<void> {
     'run_generate',
     {
       description:
-        'Run the platform engine to render all previews and produce a bundle (manifest + images), same as `phonebook generate`.',
+        'Run the platform engine to render all previews and produce a bundle (manifest + images), same as `phonebook generate`. ' +
+        'When previews crash, keeps what rendered and says which previews did not, by file and line.',
       inputSchema: {
         dir: z.string().default('.').describe('Project directory containing phonebook.config.json'),
       },
@@ -406,6 +431,9 @@ export async function runMcpServer(): Promise<void> {
         ].join('\n');
         return textResult(text);
       } catch (err) {
+        if (err instanceof IncompleteRenderError) {
+          return errorResult(await explainIncompleteRender(err, projectDir!));
+        }
         return errorResult(
           `${(err as Error).message}\nRun the check_setup tool (or \`phonebook doctor\`) to diagnose the project setup.`,
         );

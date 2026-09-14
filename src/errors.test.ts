@@ -160,6 +160,36 @@ error: xcodebuild failed (exit 65) running: xcodebuild test -project CountriesSw
     expect(lines[1]).toContain('Simulator.app');
   });
 
+  // Seen against IceCubes: three previews trapped, each took the host app down,
+  // and the runtime finally died with the same -308 a failed install produces.
+  // Advising `simctl shutdown all` there sends the reader after the simulator
+  // when the cause is the previews, and run 3 of the Stag runs did exactly that
+  // mid-run, invalidating the cloned device it was rendering on.
+  it('does not blame the simulator when previews crashed before the runtime died', () => {
+    const output = `
+Test case 'PhonebookSnapshotTests.portrait-Avatar View-0-12()' failed on 'Clone 1 of iPhone 17 Pro - Ice Cubes (94053)' (0.000 seconds)
+Test case 'PhonebookSnapshotTests.portrait-Next Page View-0-14()' passed on 'Clone 1 of iPhone 17 Pro - Ice Cubes (94698)' (0.000 seconds)
+} (error = Error Domain=NSMachErrorDomain Code=-308 "(ipc/mig) server died")
+** TEST FAILED **
+`;
+    expect(diagnoseXcodebuildFailure(output).join('\n')).not.toContain('simctl');
+  });
+
+  // Seen against IceCubes four minutes after a run where the same app launched
+  // and rendered 13 previews: this time it never connected, and the only thing
+  // Phonebook said was "exit 65".
+  it('says no preview ran when the host app never connected to the test runner', () => {
+    const output = `
+Testing failed:
+	Ice Cubes (75582) encountered an error (Early unexpected exit, operation never finished bootstrapping - no restart will be attempted. (Underlying Error: Test crashed with signal term before establishing connection.))
+** TEST FAILED **
+`;
+    const text = diagnoseXcodebuildFailure(output).join('\n');
+    expect(text).toContain('no preview ran');
+    expect(text).toContain('retry once');
+    expect(text).not.toContain('simctl');
+  });
+
   it('flags a scheme with no runnable tests', () => {
     const output = 'Scheme MyApp is not currently configured for the test action.';
     const lines = diagnoseXcodebuildFailure(output);
