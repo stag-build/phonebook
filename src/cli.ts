@@ -26,11 +26,35 @@ program
     'write an empty manifest (with a warning) instead of failing when no previews are recorded',
     false,
   )
-  .action(async (opts: { dir: string; output?: string; allowEmpty: boolean }) => {
+  .option(
+    '--changed',
+    'only render previews declared in files with uncommitted changes (android only)',
+    false,
+  )
+  .option(
+    '--files <paths>',
+    'only render previews declared in these comma-separated source files (android only)',
+  )
+  .action(async (opts: { dir: string; output?: string; allowEmpty: boolean; changed: boolean; files?: string }) => {
+    if (opts.changed && opts.files) {
+      throw new Error('--changed and --files are mutually exclusive; pass one or the other');
+    }
+    const files = opts.files
+      ?.split(',')
+      .map((f) => f.trim())
+      .filter((f) => f !== '');
+    if (files && files.length === 0) throw new Error('--files was given no paths');
+
     const { config, projectDir } = await loadConfig(opts.dir);
     const outputDir = resolve(projectDir, opts.output ?? config.output ?? 'phonebook-out');
-    const generate = config.platform === 'android' ? generateAndroid : generateIos;
-    const manifest = await generate(config, projectDir, outputDir, { allowEmpty: opts.allowEmpty });
+    const manifest =
+      config.platform === 'android'
+        ? await generateAndroid(config, projectDir, outputDir, {
+            allowEmpty: opts.allowEmpty,
+            changedOnly: opts.changed,
+            ...(files ? { files } : {}),
+          })
+        : await generateIos(config, projectDir, outputDir, { allowEmpty: opts.allowEmpty });
     console.log(`Recorded ${manifest.entries.length} previews -> ${outputDir}`);
   });
 
