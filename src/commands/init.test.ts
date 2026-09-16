@@ -174,9 +174,12 @@ describe('tryWriteSnapshotClass', () => {
     const written = await readFile(join(dir, 'UnitTests', 'PhonebookSnapshots.swift'), 'utf8');
     expect(written).toContain('import SnapshottingTests');
     expect(written).toContain('class Snapshots: SnapshotTest {');
-    expect(written).toContain('override class func snapshotPreviews() -> [String]? { nil }');
+    expect(written).toContain('override class func snapshotPreviews() -> [String]? {');
+    // Unset, the filter variable leaves the old behaviour: record every #Preview.
+    expect(written).toContain('SNAPSHOTS_ONLY_FILTER');
+    expect(written).toContain('return nil');
     // The instructions-snippet indentation must not leak into the written file.
-    expect(written).not.toMatch(/^ {5}/m);
+    expect(written).not.toMatch(/^ +(import|nonisolated)/m);
   });
 
   it('refuses when the target has no synchronized group (no project.pbxproj edit attempted)', async () => {

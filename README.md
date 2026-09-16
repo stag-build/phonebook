@@ -237,14 +237,22 @@ Add the [SnapshotPreviews](https://github.com/getsentry/SnapshotPreviews) SPM pa
 
 ```swift
 // PhonebookSnapshotTests.swift
+import Foundation
 import SnapshottingTests
 
 final class PhonebookSnapshotTests: SnapshotTest {
     override class func snapshotPreviews() -> [String]? {
-        return nil // record every #Preview
+        guard let raw = ProcessInfo.processInfo.environment["SNAPSHOTS_ONLY_FILTER"], !raw.isEmpty else {
+            return nil // record every #Preview
+        }
+        return raw.components(separatedBy: "\n")
     }
 }
 ```
+
+Reading `SNAPSHOTS_ONLY_FILTER` is what lets `phonebook generate --changed` (or `--files A.swift,B.swift`)
+render only the previews in the files you just edited; with the variable unset, every `#Preview` is recorded
+as before.
 
 Add `phonebook.config.json` next to your `.xcodeproj`:
 

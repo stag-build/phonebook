@@ -2,7 +2,15 @@ import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildEmptySnapshotsMessage, generateIos, IncompleteRenderError, mapSidecar, resolveOnlyTesting } from './ios.js';
+import {
+  buildEmptySnapshotsMessage,
+  buildSnapshotsOnlyFilter,
+  escapeRegex,
+  generateIos,
+  IncompleteRenderError,
+  mapSidecar,
+  resolveOnlyTesting,
+} from './ios.js';
 
 const sidecar = (over: object = {}, preview: object = {}) => ({
   display_name: 'UserCard/Dark',
@@ -191,5 +199,36 @@ echo "Test case 'Snapshots.portrait-Card-0-0()' passed on 'iPhone' (0.000 second
     expect(error).not.toBeInstanceOf(IncompleteRenderError);
     expect((error as Error).message).toContain('xcodebuild failed (exit 65)');
     expect((error as Error).message).toContain("imports 'SnapshotPreviews'");
+  });
+});
+
+describe('buildSnapshotsOnlyFilter', () => {
+  it('escapes regex metacharacters in a literal', () => {
+    expect(escapeRegex('My App+1/Card.swift')).toBe('My App\\+1/Card\\.swift');
+  });
+
+  it('anchors one pattern per file against the synthesized fileID', async () => {
+    const filter = await buildSnapshotsOnlyFilter(
+      ['App/Views/UserCard.swift', 'App/Button.swift', 'README.md'],
+      async () => 'App',
+    );
+    expect(filter).toBe('^App/UserCard\\.swift$\n^App/Button\\.swift$');
+  });
+
+  it('drops the whole filter when any file cannot be resolved', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const filter = await buildSnapshotsOnlyFilter(
+      ['App/Card.swift', 'Legacy/Old.swift'],
+      async (file) => (file.startsWith('App/') ? 'App' : undefined),
+    );
+    expect(filter).toBeUndefined();
+    expect(warn.mock.calls[0][0]).toContain('Legacy/Old.swift');
+    warn.mockRestore();
+  });
+
+  it('renders everything when no Swift file changed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await buildSnapshotsOnlyFilter(['README.md'], async () => 'App')).toBeUndefined();
+    warn.mockRestore();
   });
 });

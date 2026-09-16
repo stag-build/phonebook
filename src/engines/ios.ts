@@ -2,15 +2,16 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
 import { diagnoseXcodebuildFailure } from '../errors.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
 import { readPngSize } from '../png.js';
 import { parsePreviewName, spaceCamelCase } from '../naming.js';
 import { gitInfo } from './git.js';
-import { findSnapshotTestSubclass, findSnapshottingTestsTargets, readPbxprojText } from '../ios/snapshotTestClass.js';
+import { findSnapshotTestSubclass, findSnapshottingTestsTargets, moduleForFile, readPbxprojText } from '../ios/snapshotTestClass.js';
 import { parseFailedPreviews } from '../ios/unrendered.js';
+import { changedFiles } from '../scan/scope.js';
 
 /** Builds the error/warning text for a `generate` run that exported zero snapshots. Exported for tests. */
 export function buildEmptySnapshotsMessage(exportDir: string, scheme: string): string {
@@ -77,6 +78,57 @@ export async function resolveOnlyTesting(
   }
 }
 
+/** Escapes a literal so it matches itself inside a regular expression. Exported for tests. */
+export function escapeRegex(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * The SNAPSHOTS_ONLY_FILTER value that renders only the previews declared in
+ * `files`, or undefined to render everything.
+ *
+ * SnapshotPreviews filters before it creates a test method, so a pattern that
+ * misses is a preview that never renders — which makes a half-resolved filter
+ * worse than none. A file whose module cannot be read (a project that is not
+ * using Xcode's synchronized folders, a target xcodebuild will not describe)
+ * therefore drops the whole filter rather than quietly dropping that file.
+ *
+ * Each pattern is anchored against the preview's synthesized fileID,
+ * "<Module>/<File>.swift", because the match is a substring search: unanchored,
+ * "Card.swift" would also claim UserCard.swift.
+ */
+export async function buildSnapshotsOnlyFilter(
+  files: string[],
+  moduleOf: (file: string) => Promise<string | undefined>,
+): Promise<string | undefined> {
+  const swift = files.filter((file) => file.endsWith('.swift'));
+  if (swift.length === 0) {
+    console.warn('warning: no changed Swift files to narrow to; rendering every preview.');
+    return undefined;
+  }
+
+  const patterns: string[] = [];
+  const unresolved: string[] = [];
+  for (const file of swift) {
+    const module = await moduleOf(file);
+    if (!module) {
+      unresolved.push(file);
+      continue;
+    }
+    patterns.push(`^${escapeRegex(module)}/${escapeRegex(basename(file))}$`);
+  }
+
+  if (unresolved.length > 0) {
+    console.warn(
+      `warning: could not resolve the Swift module for ${unresolved.join(', ')} — ` +
+        'no filesystem-synchronized folder in the Xcode project covers it, or xcodebuild would not report its ' +
+        'build settings. Rendering every preview instead.',
+    );
+    return undefined;
+  }
+  return patterns.join('\n');
+}
+
 /**
  * Runs the SnapshotPreviews-backed XCTest target via xcodebuild on a simulator
  * and harvests the exported PNG + JSON sidecar pairs into a Phonebook bundle.
@@ -92,6 +144,10 @@ export async function generateIos(
   options: {
     quiet?: boolean;
     allowEmpty?: boolean;
+    /** Render only the previews declared in files with uncommitted changes. */
+    changedOnly?: boolean;
+    /** Render only the previews declared in these files (relative to projectDir). */
+    files?: string[];
   } = {},
 ): Promise<Manifest> {
   const ios = config.ios;
@@ -113,12 +169,14 @@ export async function generateIos(
     ];
     const onlyTesting = await resolveOnlyTesting(config, projectDir);
     if (onlyTesting) args.push(`-only-testing:${onlyTesting}`);
+    const onlyFilter = await resolveSnapshotsOnlyFilter(config, projectDir, options);
     const run = await runXcodebuild(
       projectDir,
       args,
       {
         TEST_RUNNER_SNAPSHOTS_EXPORT_DIR: exportDir,
         TEST_RUNNER_SNAPSHOTS_RUNNING_FOR_PREVIEWS: '1',
+        ...(onlyFilter ? { TEST_RUNNER_SNAPSHOTS_ONLY_FILTER: onlyFilter } : {}),
       },
       options.quiet ?? false,
     );
@@ -178,6 +236,25 @@ export async function generateIos(
   } finally {
     await rm(exportDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Turns the `--changed`/`--files` options into a SNAPSHOTS_ONLY_FILTER value,
+ * reading the pbxproj once and resolving each file's module through it.
+ */
+async function resolveSnapshotsOnlyFilter(
+  config: PhonebookConfig,
+  projectDir: string,
+  options: { changedOnly?: boolean; files?: string[] },
+): Promise<string | undefined> {
+  if (!options.changedOnly && !options.files) return undefined;
+  const ios = config.ios!;
+  const files = options.files ?? (await changedFiles(projectDir));
+  const pbxproj = await readPbxprojText(projectDir, ios.project ? join(projectDir, ios.project) : undefined);
+  const cache = new Map<string, string | undefined>();
+  return buildSnapshotsOnlyFilter(files, (file) =>
+    moduleForFile(pbxproj, projectDir, file, { project: ios.project, workspace: ios.workspace, scheme: ios.scheme }, cache),
+  );
 }
 
 /** Shape of the JSON sidecar SnapshotPreviews writes next to each PNG. */
