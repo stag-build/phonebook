@@ -1,5 +1,9 @@
+import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { promisify } from 'node:util';
+
+const run = promisify(execFile);
 
 /**
  * Shared iOS SnapshotTest-subclass discovery: scanning project sources for an
@@ -212,6 +216,143 @@ export function findSnapshotTestClassLocation(pbxproj: string): SnapshotTestClas
     }
 
     return { targetName: target.name, synchronizedFolder };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A folder covered by a PBXFileSystemSynchronizedRootGroup, and the target that
+ * owns it. Xcode 16+ projects assign whole folders to a target this way, so a
+ * source file's target — and therefore its Swift module — can be read off the
+ * pbxproj without any per-file build-phase membership.
+ *
+ * Classic PBXGroup/PBXSourcesBuildPhase projects have no such folder mapping and
+ * are deliberately out of scope: they resolve to no owner at all, and callers
+ * fall back to rendering everything.
+ */
+export interface SynchronizedGroupOwner {
+  targetName: string;
+  /** Folder path, relative to the project directory, "/"-joined and unquoted. */
+  path: string;
+  /** Paths (relative to the project directory) explicitly excluded from this target. */
+  exclusions: Set<string>;
+}
+
+function parseListItems(body: string, key: string): string[] {
+  const match = body.match(new RegExp(`${key} = \\(([\\s\\S]*?)\\);`));
+  if (!match) return [];
+  return match[1]
+    .split(',')
+    .map((item) => unquote(item.replace(/\/\*[\s\S]*?\*\//g, '').trim()))
+    .filter((item) => item.length > 0);
+}
+
+/**
+ * Every filesystem-synchronized folder in the project, with the target it
+ * belongs to and the files explicitly excepted from that target.
+ */
+export function synchronizedGroupOwners(pbxproj: string): SynchronizedGroupOwner[] {
+  const targets = extractPbxprojObjects(pbxproj, 'PBXNativeTarget');
+  const syncGroups = extractPbxprojObjects(pbxproj, 'PBXFileSystemSynchronizedRootGroup');
+  const exceptionSets = extractPbxprojObjects(pbxproj, 'PBXFileSystemSynchronizedBuildFileExceptionSet');
+
+  const owners: SynchronizedGroupOwner[] = [];
+  for (const [targetId, targetBody] of targets) {
+    const nameMatch = targetBody.match(/\n\t\t\tname = ([^\n;]+);/);
+    const targetName = nameMatch ? unquote(nameMatch[1]) : targetId;
+    const groupsMatch = targetBody.match(/fileSystemSynchronizedGroups = \(([\s\S]*?)\)/);
+    if (!groupsMatch) continue;
+
+    for (const gid of [...groupsMatch[1].matchAll(/([0-9A-F]{24})/g)].map((m) => m[1])) {
+      const groupBody = syncGroups.get(gid);
+      if (!groupBody) continue;
+      const pathMatch = groupBody.match(/\n\t\t\tpath = ([^\n;]+);/);
+      if (!pathMatch) continue;
+      const path = unquote(pathMatch[1]).replace(/\/+$/, '');
+
+      const exclusions = new Set<string>();
+      const exceptionIds = [
+        ...(groupBody.match(/exceptions = \(([\s\S]*?)\)/)?.[1] ?? '').matchAll(/([0-9A-F]{24})/g),
+      ].map((m) => m[1]);
+      for (const eid of exceptionIds) {
+        const exceptionBody = exceptionSets.get(eid);
+        if (!exceptionBody) continue;
+        // An exception set belongs to one target; one that names another target
+        // says nothing about this folder's membership here.
+        const exceptionTarget = exceptionBody.match(/\n\t\t\ttarget = ([0-9A-F]{24})/)?.[1];
+        if (exceptionTarget && exceptionTarget !== targetId) continue;
+        for (const member of parseListItems(exceptionBody, 'membershipExceptions')) {
+          exclusions.add(`${path}/${member}`);
+        }
+      }
+      owners.push({ targetName, path, exclusions });
+    }
+  }
+  return owners;
+}
+
+/**
+ * The target that compiles `filePath`, via the synchronized folder that covers
+ * it. The longest covering folder wins, so a nested folder assigned to its own
+ * target beats the parent that contains it; a file explicitly excepted from a
+ * folder's target falls through to the next-longest candidate.
+ */
+export function targetForFile(pbxproj: string, filePath: string): string | undefined {
+  const normalized = filePath.replace(/^\.\//, '');
+  const candidates = synchronizedGroupOwners(pbxproj)
+    .filter((owner) => normalized === owner.path || normalized.startsWith(`${owner.path}/`))
+    .sort((a, b) => b.path.length - a.path.length);
+  for (const candidate of candidates) {
+    if (candidate.exclusions.has(normalized)) continue;
+    return candidate.targetName;
+  }
+  return undefined;
+}
+
+/**
+ * The Swift module name a source file compiles into, or undefined when the
+ * project structure cannot say (no synchronized folder covers it, or xcodebuild
+ * cannot report the target's settings).
+ *
+ * The module name is the first half of a #Preview's synthesized fileID
+ * ("<Module>/<File>.swift"), which is what SnapshotPreviews matches its filter
+ * patterns against. `cache` is keyed by target name so a run that filters a
+ * dozen files still shells out to xcodebuild once per target.
+ */
+export async function moduleForFile(
+  pbxproj: string,
+  projectDir: string,
+  filePath: string,
+  xcodebuildTarget: { project?: string; workspace?: string; scheme?: string },
+  cache?: Map<string, string | undefined>,
+): Promise<string | undefined> {
+  const targetName = targetForFile(pbxproj, filePath);
+  if (!targetName) return undefined;
+  if (cache?.has(targetName)) return cache.get(targetName);
+
+  const module = await productModuleName(projectDir, targetName, xcodebuildTarget);
+  cache?.set(targetName, module);
+  return module;
+}
+
+async function productModuleName(
+  projectDir: string,
+  targetName: string,
+  xcodebuildTarget: { project?: string; workspace?: string; scheme?: string },
+): Promise<string | undefined> {
+  const args = ['-showBuildSettings'];
+  if (xcodebuildTarget.workspace) {
+    args.push('-workspace', xcodebuildTarget.workspace);
+    if (xcodebuildTarget.scheme) args.push('-scheme', xcodebuildTarget.scheme);
+  } else if (xcodebuildTarget.project) {
+    args.push('-project', xcodebuildTarget.project);
+  }
+  args.push('-target', targetName);
+  try {
+    const { stdout } = await run('xcodebuild', args, { cwd: projectDir, maxBuffer: 32 * 1024 * 1024 });
+    const match = stdout.match(/^\s*PRODUCT_MODULE_NAME = (.+)$/m);
+    return match ? match[1].trim() : undefined;
   } catch {
     return undefined;
   }

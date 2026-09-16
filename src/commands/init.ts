@@ -455,10 +455,16 @@ This project uses a Gradle version catalog ("${prefix}"). Equivalent additions u
  * legal since Swift 6.1 and Phonebook requires Xcode 26.3, so on a project
  * that never enabled the setting it restates what was already true.
  */
-export const IOS_SNAPSHOT_TEST_CLASS_SNIPPET = `     import SnapshottingTests
+export const IOS_SNAPSHOT_TEST_CLASS_SNIPPET = `     import Foundation
+     import SnapshottingTests
 
      nonisolated class Snapshots: SnapshotTest {
-       override class func snapshotPreviews() -> [String]? { nil }
+       override class func snapshotPreviews() -> [String]? {
+         guard let raw = ProcessInfo.processInfo.environment["SNAPSHOTS_ONLY_FILTER"], !raw.isEmpty else {
+           return nil // record every #Preview
+         }
+         return raw.components(separatedBy: "\\n")
+       }
      }`;
 
 function printIosInstructions(): void {

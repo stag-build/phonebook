@@ -26,11 +26,29 @@ program
     'write an empty manifest (with a warning) instead of failing when no previews are recorded',
     false,
   )
-  .action(async (opts: { dir: string; output?: string; allowEmpty: boolean }) => {
+  .option('--changed', 'render only the previews declared in files with uncommitted changes (iOS only)', false)
+  .option(
+    '--files <paths>',
+    'comma-separated source files; render only the previews declared in them (iOS only)',
+  )
+  .action(async (opts: { dir: string; output?: string; allowEmpty: boolean; changed: boolean; files?: string }) => {
+    if (opts.changed && opts.files) {
+      throw new Error('--changed and --files cannot be combined: pass one or the other.');
+    }
+    const files = opts.files
+      ?.split(',')
+      .map((f) => f.trim())
+      .filter((f) => f.length > 0);
     const { config, projectDir } = await loadConfig(opts.dir);
     const outputDir = resolve(projectDir, opts.output ?? config.output ?? 'phonebook-out');
-    const generate = config.platform === 'android' ? generateAndroid : generateIos;
-    const manifest = await generate(config, projectDir, outputDir, { allowEmpty: opts.allowEmpty });
+    const manifest =
+      config.platform === 'android'
+        ? await generateAndroid(config, projectDir, outputDir, { allowEmpty: opts.allowEmpty })
+        : await generateIos(config, projectDir, outputDir, {
+            allowEmpty: opts.allowEmpty,
+            ...(opts.changed ? { changedOnly: true } : {}),
+            ...(files ? { files } : {}),
+          });
     console.log(`Recorded ${manifest.entries.length} previews -> ${outputDir}`);
   });
 
