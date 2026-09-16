@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { loadConfig } from '../config.js';
+import { loadConfig, type PhonebookConfig } from '../config.js';
 import { collectDoctorChecks } from '../commands/doctor.js';
 import { generateAndroid } from '../engines/android.js';
 import { generateIos, IncompleteRenderError } from '../engines/ios.js';
@@ -31,6 +31,50 @@ function errorResult(message: string) {
 
 function textResult(text: string) {
   return { content: [{ type: 'text' as const, text }] };
+}
+
+/**
+ * A requested file that declares no previews renders nothing — on Android,
+ * narrowing the recording task to a `--tests` pattern for it would otherwise
+ * fail the whole build ("no tests found for given includes") rather than just
+ * recording nothing there. `isFailOnNoMatchingTests = false` in the project's
+ * own Gradle setup prevents the crash; this is the proactive half, telling
+ * the agent *before* the run that a file it asked for has nothing to show,
+ * instead of leaving it to infer that from an empty manifest.
+ *
+ * Best-effort: a scan failure here must never block the generate it's
+ * warning about, so errors are swallowed and reported as no warning.
+ */
+async function warnAboutPreviewlessFiles(
+  config: PhonebookConfig,
+  projectDir: string,
+  requested: string[],
+): Promise<string> {
+  let report: CoverageReport;
+  try {
+    if (config.platform === 'android') {
+      const { scanAndroid } = await import('../scan/android.js');
+      report = await scanAndroid(projectDir, config.android?.modules ?? [':app']);
+    } else {
+      const { scanIos } = await import('../scan/ios.js');
+      report = await scanIos(projectDir);
+    }
+  } catch {
+    return '';
+  }
+
+  const covered = new Set<string>();
+  for (const c of report.components) {
+    if (c.previews.length > 0) covered.add(c.file);
+  }
+  for (const p of report.orphanPreviews) covered.add(p.file);
+
+  const empty = requested.filter((f) => !covered.has(f));
+  if (empty.length === 0) return '';
+  return (
+    `warning: no previews found in ${empty.join(', ')} — generate will record nothing for ` +
+    `${empty.length === 1 ? 'it' : 'them'}. Run analyze_coverage to see why.\n\n`
+  );
 }
 
 /**
@@ -407,25 +451,51 @@ export async function runMcpServer(): Promise<void> {
     {
       description:
         'Run the platform engine to render all previews and produce a bundle (manifest + images), same as `phonebook generate`. ' +
-        'When previews crash, keeps what rendered and says which previews did not, by file and line.',
+        'When previews crash, keeps what rendered and says which previews did not, by file and line. ' +
+        'Pass changed or files to render only the previews declared in those files, for a faster loop while iterating.',
       inputSchema: {
         dir: z.string().default('.').describe('Project directory containing phonebook.config.json'),
+        changed: z
+          .boolean()
+          .optional()
+          .describe('Render only previews declared in files with uncommitted git changes. Ignored outside a git repository.'),
+        files: z
+          .array(z.string())
+          .optional()
+          .describe('Render only previews declared in these files, relative to the project directory.'),
       },
     },
-    async ({ dir }) => {
+    async ({ dir, changed, files }) => {
+      if (changed && files) {
+        return errorResult('changed and files cannot be combined: pass one or the other.');
+      }
       let projectDir: string;
       try {
         const loaded = await loadConfig(dir);
         projectDir = loaded.projectDir;
         const outputDir = resolve(projectDir, loaded.config.output ?? 'phonebook-out');
+
+        const requested = files ?? (changed ? await changedFiles(projectDir) : undefined);
+        const warning = requested?.length
+          ? await warnAboutPreviewlessFiles(loaded.config, projectDir, requested)
+          : '';
+
         const manifest =
           loaded.config.platform === 'android'
-            ? await generateAndroid(loaded.config, projectDir, outputDir, { quiet: true })
-            : await generateIos(loaded.config, projectDir, outputDir, { quiet: true });
+            ? await generateAndroid(loaded.config, projectDir, outputDir, {
+                quiet: true,
+                ...(changed ? { changedOnly: true } : {}),
+                ...(files ? { files } : {}),
+              })
+            : await generateIos(loaded.config, projectDir, outputDir, {
+                quiet: true,
+                ...(changed ? { changedOnly: true } : {}),
+                ...(files ? { files } : {}),
+              });
 
         const componentStates = manifest.entries.map((e) => `${e.component}/${e.state}`).sort();
         const text = [
-          `Recorded ${manifest.entries.length} previews -> ${outputDir}`,
+          `${warning}Recorded ${manifest.entries.length} previews -> ${outputDir}`,
           '',
           ...componentStates,
         ].join('\n');

@@ -360,6 +360,10 @@ async function printAndroidInstructions(projectDir: string, modules: string[]): 
            isIncludeAndroidResources = true
            all {
              it.systemProperties["robolectric.pixelCopyRenderMode"] = "hardware"
+             // \`phonebook generate --changed\`/\`--files\` narrows this task to a --tests
+             // pattern; a module with none of the requested previews would otherwise fail
+             // the build instead of just recording nothing.
+             it.filter.isFailOnNoMatchingTests = false
            }
          }
        }
