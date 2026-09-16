@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, readdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { join, relative, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
+import { changedFiles } from '../scan/scope.js';
 import { diagnoseGradleFailure } from '../errors.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
 import { readPngSize } from '../png.js';
@@ -27,6 +28,130 @@ export function checkEmptyEntries(entryCount: number, allowEmpty: boolean): void
 }
 
 /**
+ * The single parameterized JUnit class Roborazzi's Gradle plugin generates for
+ * `generateComposePreviewRobolectricTests`. Verified against
+ * GenerateComposePreviewRobolectricTestsTask.generateTests, which hardcodes
+ * `com.github.takahirom.roborazzi.RoborazziPreviewParameterizedTests` and, when
+ * `generatedTestClassCount > 1`, suffixes it with the shard index (…Tests0,
+ * …Tests1). There is no per-preview or per-file test class, so a file-scoped
+ * filter has to select *parameters* of this one class.
+ */
+const GENERATED_TEST_CLASS = 'RoborazziPreviewParameterizedTests';
+
+/**
+ * A `--tests` pattern selecting every preview declared by one JVM class.
+ *
+ * The generated class has a single `@Test fun test()` run by
+ * ParameterizedRobolectricTestRunner with `@Parameters(name = "{0}")`, so JUnit
+ * reports each preview as the method `test[<parameter toString>]`. The
+ * parameter's toString is
+ * `JUnit4TestParameter(preview=<ComposablePreview>)`, and ComposablePreview's
+ * toString (ProvideComposablePreview in ComposablePreviewScanner) is
+ * `<declaringClass>_<methodName>[_<paramTypes>][_<previewIndex>]` — so the
+ * declaring class, followed by an underscore, appears verbatim in the test name.
+ *
+ * Gradle matches `--tests` against `className + "." + methodName` as a full
+ * regex with `*` → `.*` and everything else quoted (ClassTestSelectionMatcher),
+ * so dots and brackets in the pattern are literal and a leading `*` disables the
+ * class-scan pruning. That makes this pattern safe for both the sharded and
+ * unsharded class names.
+ */
+export function testsPatternForClass(declaringClass: string): string {
+  return `*${GENERATED_TEST_CLASS}*.test[*${declaringClass}_*]`;
+}
+
+/**
+ * The JVM facade class Kotlin generates for top-level declarations in `file`:
+ * `ui/PrimaryButton.kt` -> `PrimaryButtonKt`.
+ */
+export function kotlinFacadeClass(file: string): string {
+  const base = file.split('/').pop()!.replace(/\.kt$/, '');
+  return `${base.charAt(0).toUpperCase()}${base.slice(1)}Kt`;
+}
+
+/** The directory a Gradle module path maps to, relative to the project dir. */
+function moduleDir(module: string): string {
+  return module.split(':').filter(Boolean).join('/');
+}
+
+/** The module owning `file`, preferring the deepest match (`:a:b` over `:a`). */
+export function moduleOfFile(file: string, modules: string[]): string | undefined {
+  let best: string | undefined;
+  for (const module of modules) {
+    const dir = moduleDir(module);
+    if (dir !== '' && !file.startsWith(`${dir}/`)) continue;
+    if (best === undefined || moduleDir(module).length > moduleDir(best).length) best = module;
+  }
+  return best;
+}
+
+export interface PreviewFilterPlan {
+  /** Module -> `--tests` patterns. An empty array means "run this module unfiltered". */
+  byModule: Map<string, string[]>;
+  /** Human-readable reasons a file forced its module to run unfiltered. */
+  warnings: string[];
+}
+
+/**
+ * Maps changed source files onto Gradle `--tests` patterns, per module.
+ *
+ * `sources` carries each file's text (undefined when it could not be read).
+ * Only Kotlin files can declare a Compose `@Preview`, so everything else is
+ * ignored. A file whose declaring class cannot be predicted with confidence —
+ * unreadable, or carrying a `@file:JvmName` that renames the facade class —
+ * makes its whole module run unfiltered rather than silently dropping previews
+ * from the manifest.
+ */
+export function planPreviewFilter(
+  sources: { file: string; source?: string }[],
+  modules: string[],
+): PreviewFilterPlan {
+  const byModule = new Map<string, string[]>();
+  const unfiltered = new Set<string>();
+  const warnings: string[] = [];
+
+  for (const { file, source } of sources) {
+    const normalized = file.replace(/\\/g, '/');
+    if (!normalized.endsWith('.kt')) continue;
+    const module = moduleOfFile(normalized, modules);
+    if (module === undefined) continue;
+
+    const forceFull = (reason: string) => {
+      unfiltered.add(module);
+      byModule.set(module, []);
+      warnings.push(`${normalized}: ${reason}; recording all of ${module} instead`);
+    };
+
+    if (source === undefined) {
+      forceFull('could not be read, so its generated test name is unknown');
+      continue;
+    }
+    if (/^\s*@file:\s*JvmName\s*\(/m.test(source)) {
+      forceFull('uses @file:JvmName, so its Kotlin facade class name is not derivable');
+      continue;
+    }
+    if (unfiltered.has(module)) continue;
+
+    const pkg = source.match(/^\s*package\s+([A-Za-z_][\w.]*)/m)?.[1];
+    const prefix = pkg ? `${pkg}.` : '';
+    // Top-level classes/objects too: a @Preview declared inside one is reported
+    // under that class, not under the file facade.
+    const declared = [
+      kotlinFacadeClass(normalized),
+      ...[...source.matchAll(/^(?:\w+ )*(?:class|object) (\w+)/gm)].map((m) => m[1]),
+    ];
+    const patterns = byModule.get(module) ?? [];
+    for (const name of declared) {
+      const pattern = testsPatternForClass(`${prefix}${name}`);
+      if (!patterns.includes(pattern)) patterns.push(pattern);
+    }
+    byModule.set(module, patterns);
+  }
+
+  return { byModule, warnings };
+}
+
+/**
  * Runs Roborazzi (with ComposablePreviewScanner-generated tests) via Gradle and
  * harvests the recorded PNGs into a Phonebook bundle.
  */
@@ -34,14 +159,48 @@ export async function generateAndroid(
   config: PhonebookConfig,
   projectDir: string,
   outputDir: string,
-  options: { quiet?: boolean; allowEmpty?: boolean } = {},
+  options: { quiet?: boolean; allowEmpty?: boolean; changedOnly?: boolean; files?: string[] } = {},
 ): Promise<Manifest> {
   const modules = config.android?.modules ?? [':app'];
   const variant = config.android?.variant ?? 'debug';
   const variantCap = variant[0].toUpperCase() + variant.slice(1);
+  const quiet = options.quiet ?? false;
+  const task = (module: string) => `${module}:recordRoborazzi${variantCap}`;
 
-  const tasks = modules.map((m) => `${m}:recordRoborazzi${variantCap}`);
-  await runGradle(projectDir, tasks, options.quiet ?? false);
+  // Modules deliberately not recorded this run: their previously recorded PNGs
+  // are still harvested, but a missing output directory is not an error.
+  const skipped = new Set<string>();
+
+  if (options.files || options.changedOnly) {
+    const requested = options.files ?? (await changedFiles(projectDir));
+    const files = requested.map((f) => relative(projectDir, resolve(projectDir, f)).replace(/\\/g, '/'));
+    const sources = await Promise.all(
+      files.map(async (file) => ({
+        file,
+        source: await readFile(join(projectDir, file), 'utf8').catch(() => undefined),
+      })),
+    );
+    const plan = planPreviewFilter(sources, modules);
+    for (const warning of plan.warnings) console.warn(`warning: ${warning}`);
+
+    for (const module of modules) {
+      const patterns = plan.byModule.get(module);
+      if (patterns === undefined) {
+        skipped.add(module);
+        continue;
+      }
+      const extraArgs = patterns.flatMap((p) => ['--tests', p]);
+      await runGradle(projectDir, [task(module)], quiet, { extraArgs });
+    }
+    if (skipped.size === modules.length) {
+      console.warn(
+        'warning: none of the requested files declare previews in a configured module; ' +
+          'nothing was re-recorded and the bundle reflects the previous run.',
+      );
+    }
+  } else {
+    await runGradle(projectDir, modules.map(task), quiet);
+  }
 
   const imagesDir = join(outputDir, 'images');
   await mkdir(imagesDir, { recursive: true });
@@ -57,6 +216,9 @@ export async function generateAndroid(
         .map(String)
         .filter((f) => f.endsWith('.png'));
     } catch {
+      // A module skipped by --changed/--files was never asked to record, so an
+      // absent output directory says nothing about its Roborazzi setup.
+      if (skipped.has(module)) continue;
       throw new Error(
         `No Roborazzi output at ${roborazziDir}. Is the Roborazzi plugin with ` +
           `generateComposePreviewRobolectricTests enabled in ${module}?`,
@@ -264,11 +426,20 @@ export function runGradle(
   projectDir: string,
   tasks: string[],
   quiet: boolean,
-  options: { dumpTailOnFailure?: boolean; onOutput?: (output: string) => void } = {},
+  options: {
+    dumpTailOnFailure?: boolean;
+    onOutput?: (output: string) => void;
+    /**
+     * Gradle CLI arguments appended after the task names — task-scoped options
+     * such as `--tests <pattern>` only bind to the task they follow, so callers
+     * that filter pass one task at a time.
+     */
+    extraArgs?: string[];
+  } = {},
 ): Promise<void> {
   return new Promise((res, rej) => {
     const gradlew = resolve(projectDir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
-    const child = spawn(gradlew, [...tasks, '--stacktrace'], {
+    const child = spawn(gradlew, [...tasks, ...(options.extraArgs ?? []), '--stacktrace'], {
       cwd: projectDir,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

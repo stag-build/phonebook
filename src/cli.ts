@@ -26,10 +26,10 @@ program
     'write an empty manifest (with a warning) instead of failing when no previews are recorded',
     false,
   )
-  .option('--changed', 'render only the previews declared in files with uncommitted changes (iOS only)', false)
+  .option('--changed', 'render only the previews declared in files with uncommitted changes', false)
   .option(
     '--files <paths>',
-    'comma-separated source files; render only the previews declared in them (iOS only)',
+    'comma-separated source files; render only the previews declared in them',
   )
   .action(async (opts: { dir: string; output?: string; allowEmpty: boolean; changed: boolean; files?: string }) => {
     if (opts.changed && opts.files) {
@@ -39,11 +39,17 @@ program
       ?.split(',')
       .map((f) => f.trim())
       .filter((f) => f.length > 0);
+    if (files && files.length === 0) throw new Error('--files was given no paths');
+
     const { config, projectDir } = await loadConfig(opts.dir);
     const outputDir = resolve(projectDir, opts.output ?? config.output ?? 'phonebook-out');
     const manifest =
       config.platform === 'android'
-        ? await generateAndroid(config, projectDir, outputDir, { allowEmpty: opts.allowEmpty })
+        ? await generateAndroid(config, projectDir, outputDir, {
+            allowEmpty: opts.allowEmpty,
+            changedOnly: opts.changed,
+            ...(files ? { files } : {}),
+          })
         : await generateIos(config, projectDir, outputDir, {
             allowEmpty: opts.allowEmpty,
             ...(opts.changed ? { changedOnly: true } : {}),
