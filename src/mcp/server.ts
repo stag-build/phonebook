@@ -7,9 +7,11 @@ import { z } from 'zod';
 import { loadConfig } from '../config.js';
 import { collectDoctorChecks } from '../commands/doctor.js';
 import { generateAndroid } from '../engines/android.js';
-import { generateIos } from '../engines/ios.js';
+import { generateIos, IncompleteRenderError } from '../engines/ios.js';
+import { explainFailedPreviews, summarizeIncompleteRender } from '../ios/unrendered.js';
 import { buildSite } from '../site/build.js';
 import type { CoverageReport } from '../scan/types.js';
+import { changedFiles, scopeReport } from '../scan/scope.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -31,11 +33,41 @@ function textResult(text: string) {
   return { content: [{ type: 'text' as const, text }] };
 }
 
+/**
+ * The crash report for a render that did not finish. Only this path needs the
+ * source: the test names say which file crashed, and the scan says which
+ * previews that file declares. Without a scan the containers still say where to
+ * look.
+ */
+async function explainIncompleteRender(error: IncompleteRenderError, projectDir: string): Promise<string> {
+  let explained = [...new Set(error.failedPreviews)].map((container) => ({
+    container,
+    failures: error.failedPreviews.filter((f) => f === container).length,
+    unrendered: [] as { file: string; line: number; name: string }[],
+  }));
+  try {
+    const { scanIos } = await import('../scan/ios.js');
+    const report = await scanIos(projectDir);
+    const previews = [...report.components.flatMap((c) => c.previews), ...report.orphanPreviews];
+    explained = explainFailedPreviews(error.failedPreviews, error.manifest.entries, previews);
+  } catch {
+    // The containers alone still say where to look.
+  }
+  return summarizeIncompleteRender(error, explained);
+}
+
 export function summarizeCoverage(report: CoverageReport): string {
   const { stats } = report;
   const withoutPreview = stats.components - stats.withPreview;
   const orphanCount = report.orphanPreviews.length;
   return [
+    // First, so a reader never mistakes a slice for the project. Every number
+    // under it counts the components in scope and no others.
+    ...(report.scope
+      ? [
+          `Scope: ${stats.components} of ${report.scope.componentsScanned} components, filtered to ${report.scope.paths.join(', ')}`,
+        ]
+      : []),
     `Components: ${stats.components}`,
     `With preview: ${stats.withPreview}`,
     `Without preview: ${withoutPreview}`,
@@ -48,6 +80,69 @@ export function summarizeCoverage(report: CoverageReport): string {
       ? `Orphan previews (could not be matched to a component in the same file): ${orphanCount}`
       : `Orphan previews (unmatched to a component): ${orphanCount}`,
   ].join('\n');
+}
+
+const REACH_LIST_CAP = 25;
+
+/**
+ * What a scoped report would otherwise hide: previews and views outside the
+ * scope that show a component inside it.
+ *
+ * Kept apart from the gaps above, and worded differently, because they are not
+ * the same kind of claim. A gap is a defect with a fix. The first list here is
+ * a fact — these previews show what you changed, and only their source says
+ * whether that matters. The second is a question: nothing renders that context
+ * at all, and whether it deserves a preview is a judgment about the product
+ * rather than about the code.
+ */
+export function summarizeReach(report: CoverageReport): string {
+  const shown = report.scope?.previewsOfWhatChanged ?? [];
+  const ask = report.scope?.uncoveredUsesOfWhatChanged ?? [];
+  if (shown.length === 0 && ask.length === 0) return '';
+
+  const lines: string[] = [];
+
+  if (shown.length > 0) {
+    lines.push(
+      `Previews elsewhere that render what you changed (${shown.length})`,
+      'Outside the files you named, so they are not in the report above. A preview reaches',
+      'what you changed through the views it renders, so its own body may not name it. Read',
+      'each one and decide whether it still shows the right thing.',
+    );
+    for (const p of shown.slice(0, REACH_LIST_CAP)) {
+      lines.push(`  ${p.file}:${p.line} "${p.name}" renders ${p.renders.join(', ')}`);
+    }
+    if (shown.length > REACH_LIST_CAP) lines.push(`  ... and ${shown.length - REACH_LIST_CAP} more (see JSON)`);
+  }
+
+  if (ask.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push(
+      `Views that show what you changed, where no preview does (${ask.length})`,
+      'Your change never reaches a screenshot in these contexts. Whether it should is the',
+      'designer\'s call, not yours: end your turn by asking, with these as the options.',
+    );
+    for (const u of ask.slice(0, REACH_LIST_CAP)) {
+      if (u.reason === 'no-preview') {
+        lines.push(`  ${u.file}:${u.line} ${u.component} renders ${u.uses.join(', ')} and has no preview`);
+        continue;
+      }
+      // Two lines, because a condition the reader cannot act on is not worth the
+      // one. The first says what hides the render, the second says which preview
+      // could stop hiding it.
+      lines.push(`  ${u.file}:${u.line} ${u.component} renders ${u.uses.join(', ')} only inside \`${u.guard}\``);
+      const previews = u.previews ?? [];
+      const where = previews.map((p) => `${p.file}:${p.line}`).join(', ');
+      lines.push(
+        previews.length === 1
+          ? `    its preview (${where}) does not set that`
+          : `    none of its ${previews.length} previews set that (${where})`,
+      );
+    }
+    if (ask.length > REACH_LIST_CAP) lines.push(`  ... and ${ask.length - REACH_LIST_CAP} more (see JSON)`);
+  }
+
+  return lines.join('\n');
 }
 
 const HINT_LIST_CAP = 40;
@@ -150,6 +245,8 @@ Canvas size (Android): preview dimensions come only from the @Preview annotation
 
 Canvas size (iOS): preview dimensions come from traits: (e.g. .fixedLayout(width:height:)) or .previewDevice on the #Preview, not from a frame modifier in the view body.
 
+Environment (iOS): a preview must supply every object the view tree reads with @Environment(SomeType.self). SwiftUI has no default for one, so an @Observable that is missing traps the moment the body reads it — the preview does not render wrong, it crashes. Read the view's own @Environment declarations, and its subviews', and pass each one: .environment(SomeType.shared), .environment(SomeType()), or the project's own preview helper if it has one (a \`func ...() -> some View\` extension that chains .environment calls). analyze_coverage reports the direct ones it can see as \`env-missing\`; a subview's needs are yours to find. The keypath form, @Environment(\\.openURL), always has a value and never needs supplying.
+
 Snapshot test class (iOS): the SnapshotTest subclass that records previews must live in the app-hosted unit-test target's own folder (the target linking SnapshottingTests, hosted via TEST_HOST/BUNDLE_LOADER) — run \`phonebook doctor\` to see which target and where. In a project using Xcode's filesystem-synchronized groups, just creating the file in that folder is enough (Xcode picks it up automatically); \`phonebook init --write-snapshot-class\` can do this for you when that condition holds.`;
 
 function androidTemplate(component: string, states: string[]): string {
@@ -203,12 +300,20 @@ export async function runMcpServer(): Promise<void> {
     'analyze_coverage',
     {
       description:
-        'Scan the codebase for UI components and the previews that cover them, and report what each component is missing: states implied by its parameters, dark theme, large text, and localization when the project ships one. Read-only — it reports the gaps, it does not write previews.',
+        'Scan the codebase for UI components and the previews that cover them, and report what each component is missing: states implied by its parameters, environment objects no preview supplies, dark theme, large text, and localization when the project ships one. Read-only — it reports the gaps, it does not write previews. After editing, pass changed: true (or paths) to hear only about what you touched; the whole project is always scanned either way, so the answers stay correct.',
       inputSchema: {
         dir: z.string().default('.').describe('Project directory containing phonebook.config.json'),
+        paths: z
+          .array(z.string())
+          .optional()
+          .describe('Report only components declared in these files or directories, relative to the project directory. The whole project is still scanned.'),
+        changed: z
+          .boolean()
+          .optional()
+          .describe('Report only components in files with uncommitted git changes — what you just edited. Ignored outside a git repository. Combined with paths when both are given.'),
       },
     },
-    async ({ dir }) => {
+    async ({ dir, paths, changed }) => {
       let projectDir: string;
       let platform: 'android' | 'ios';
       let modules: string[];
@@ -236,10 +341,28 @@ export async function runMcpServer(): Promise<void> {
         return errorResult(`Failed to analyze coverage: ${(err as Error).message}`);
       }
 
+      // Scoping narrows the report, never the scan: which types are enums,
+      // what the project's preview helper supplies and which locales ship are
+      // facts about the project, and a scan of the changed files alone would
+      // get all three wrong.
+      const scope = [...(paths ?? []), ...(changed ? await changedFiles(projectDir) : [])];
+      if (scope.length > 0) {
+        const scoped = scopeReport(report, scope);
+        if (scoped.components.length === 0) {
+          return textResult(
+            `No components found in ${scope.join(', ')}. The scan found ${report.components.length} in the project; either nothing there declares a component, or the paths are not relative to ${projectDir}.`,
+          );
+        }
+        report = scoped;
+      }
+
       const summary = summarizeCoverage(report);
       const gaps = summarizeGaps(report);
       const hints = summarizeHints(report);
-      return textResult(`${summary}\n\n${gaps}\n\n${hints}\n\n${JSON.stringify(report, null, 2)}`);
+      const reach = summarizeReach(report);
+      return textResult(
+        [summary, gaps, hints, reach, JSON.stringify(report, null, 2)].filter((s) => s !== '').join('\n\n'),
+      );
     },
   );
 
@@ -283,7 +406,8 @@ export async function runMcpServer(): Promise<void> {
     'run_generate',
     {
       description:
-        'Run the platform engine to render all previews and produce a bundle (manifest + images), same as `phonebook generate`.',
+        'Run the platform engine to render all previews and produce a bundle (manifest + images), same as `phonebook generate`. ' +
+        'When previews crash, keeps what rendered and says which previews did not, by file and line.',
       inputSchema: {
         dir: z.string().default('.').describe('Project directory containing phonebook.config.json'),
       },
@@ -307,6 +431,9 @@ export async function runMcpServer(): Promise<void> {
         ].join('\n');
         return textResult(text);
       } catch (err) {
+        if (err instanceof IncompleteRenderError) {
+          return errorResult(await explainIncompleteRender(err, projectDir!));
+        }
         return errorResult(
           `${(err as Error).message}\nRun the check_setup tool (or \`phonebook doctor\`) to diagnose the project setup.`,
         );

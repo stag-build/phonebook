@@ -75,7 +75,14 @@ export function diagnoseXcodebuildFailure(output: string): string[] {
     );
   }
 
-  if (/Failed to install or launch the test runner|Mach error -308|\(ipc\/mig\) server died/.test(output)) {
+  // The runtime also dies with -308 after previews have been trapping for a
+  // while. Then the previews are the cause, and resetting the simulator
+  // mid-run only destroys the device the run is using.
+  const previewsFailed = /Test case '[^']+' failed/.test(output);
+  if (
+    !previewsFailed &&
+    /Failed to install or launch the test runner|Mach error -308|\(ipc\/mig\) server died/.test(output)
+  ) {
     lines.push(
       'The iOS simulator runtime died while installing the test runner — usually transient, not a setup problem.',
     );
@@ -83,6 +90,17 @@ export function diagnoseXcodebuildFailure(output: string): string[] {
       'Retry once; if it persists run: xcrun simctl shutdown all  (and if still failing: xcrun simctl erase ' +
         '"<device name>"). First boot of a newly installed runtime can also take minutes — let it finish in ' +
         'Simulator.app before retrying.',
+    );
+  }
+
+  if (/never finished bootstrapping|before establishing connection/.test(output)) {
+    lines.push(
+      'The app hosting the previews was stopped before the test runner connected to it, so no preview ran: it ' +
+        'hung or crashed while launching.',
+    );
+    lines.push(
+      'If the same app launched in an earlier run, the simulator is the difference, not the app: retry once. ' +
+        'If it fails again, the app\'s own launch is what to look at, before any preview.',
     );
   }
 

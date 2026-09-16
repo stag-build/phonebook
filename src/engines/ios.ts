@@ -10,6 +10,7 @@ import { readPngSize } from '../png.js';
 import { parsePreviewName, spaceCamelCase } from '../naming.js';
 import { gitInfo } from './git.js';
 import { findSnapshotTestSubclass, findSnapshottingTestsTargets, readPbxprojText } from '../ios/snapshotTestClass.js';
+import { parseFailedPreviews } from '../ios/unrendered.js';
 
 /** Builds the error/warning text for a `generate` run that exported zero snapshots. Exported for tests. */
 export function buildEmptySnapshotsMessage(exportDir: string, scheme: string): string {
@@ -20,6 +21,34 @@ export function buildEmptySnapshotsMessage(exportDir: string, scheme: string): s
   );
 }
 
+
+/**
+ * A run that rendered some previews and did not finish, usually because a
+ * preview crashed. The bundle of what did render has been written.
+ *
+ * Thrown rather than returned so a caller that only knows the happy path — the
+ * CLI — still exits non-zero, while one that can use the partial result catches
+ * it. The crash list is worth more than a clean failure: every preview that traps
+ * costs a host-app relaunch, so it is what makes the next run shorter.
+ */
+export class IncompleteRenderError extends Error {
+  constructor(
+    readonly manifest: Manifest,
+    readonly outputDir: string,
+    /** Container of each preview test the runner reported failed, one per test. */
+    readonly failedPreviews: string[],
+    readonly diagnosis: string[],
+  ) {
+    const crashed =
+      failedPreviews.length > 0 ? `; ${failedPreviews.length} crashed (${[...new Set(failedPreviews)].join(', ')})` : '';
+    super(
+      [`Rendered ${manifest.entries.length} previews into ${outputDir}, but the run did not finish${crashed}.`, ...diagnosis].join(
+        '\n',
+      ),
+    );
+    this.name = 'IncompleteRenderError';
+  }
+}
 
 /**
  * Resolves the -only-testing:Target/Class argument so `generate` runs just the
@@ -60,7 +89,10 @@ export async function generateIos(
   config: PhonebookConfig,
   projectDir: string,
   outputDir: string,
-  options: { quiet?: boolean; allowEmpty?: boolean } = {},
+  options: {
+    quiet?: boolean;
+    allowEmpty?: boolean;
+  } = {},
 ): Promise<Manifest> {
   const ios = config.ios;
   if (!ios?.scheme) throw new Error('phonebook.config.json: "ios.scheme" is required');
@@ -81,7 +113,7 @@ export async function generateIos(
     ];
     const onlyTesting = await resolveOnlyTesting(config, projectDir);
     if (onlyTesting) args.push(`-only-testing:${onlyTesting}`);
-    await runXcodebuild(
+    const run = await runXcodebuild(
       projectDir,
       args,
       {
@@ -90,12 +122,21 @@ export async function generateIos(
       },
       options.quiet ?? false,
     );
+    const finished = run.exitCode === 0;
+
+    // Read before deciding anything: a run that failed may still have rendered
+    // most of the gallery, and the export directory is deleted on the way out.
+    const pngs = (await readdir(exportDir)).filter((f) => f.endsWith('.png')).sort();
+    if (!finished && pngs.length === 0 && run.failedPreviews.length === 0) {
+      throw new Error(
+        [`xcodebuild failed (exit ${run.exitCode}) running: xcodebuild ${args.join(' ')}`, ...run.diagnosis].join('\n'),
+      );
+    }
 
     const imagesDir = join(outputDir, 'images');
     await mkdir(imagesDir, { recursive: true });
 
-    const pngs = (await readdir(exportDir)).filter((f) => f.endsWith('.png')).sort();
-    if (pngs.length === 0) {
+    if (finished && pngs.length === 0) {
       const message = buildEmptySnapshotsMessage(exportDir, ios.scheme);
       if (!(options.allowEmpty ?? false)) {
         throw new Error(message);
@@ -130,6 +171,9 @@ export async function generateIos(
       entries,
     };
     await writeFile(join(outputDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    if (!finished) {
+      throw new IncompleteRenderError(manifest, outputDir, run.failedPreviews, run.diagnosis);
+    }
     return manifest;
   } finally {
     await rm(exportDir, { recursive: true, force: true });
@@ -202,6 +246,15 @@ export function mapSidecar(png: string, sidecar: SnapshotSidecar): Omit<Manifest
   };
 }
 
+/** How an xcodebuild run ended. */
+export interface XcodebuildRun {
+  exitCode: number | null;
+  /** Container of each preview test the runner reported failed, one per test. */
+  failedPreviews: string[];
+  /** Known failure signatures found in the output; empty on success. */
+  diagnosis: string[];
+}
+
 /**
  * Runs xcodebuild. When `quiet` is false (the CLI default), output streams
  * straight to this process's stdout/stderr as it arrives (so a human can
@@ -211,16 +264,17 @@ export function mapSidecar(png: string, sidecar: SnapshotSidecar): Omit<Manifest
  * tail is kept and nothing is echoed live; the tail is written to stderr once
  * if the build fails.
  *
- * On a non-zero exit, the tail is run through `diagnoseXcodebuildFailure` —
- * any matched diagnosis lines are printed to stderr (`phonebook: `-prefixed)
- * and folded into the rejected Error's message, mirroring `runGradle`.
+ * Resolves however the run ends, and rejects only when xcodebuild cannot be
+ * started: a failed run can still have rendered previews, and that is for the
+ * caller to judge. Failed preview tests are read from the whole stream rather
+ * than the tail, and line by line, since a chunk can end mid-line.
  */
 export function runXcodebuild(
   cwd: string,
   args: string[],
   env: Record<string, string>,
   quiet: boolean,
-): Promise<void> {
+): Promise<XcodebuildRun> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('xcodebuild', args, {
       cwd: resolve(cwd),
@@ -229,31 +283,32 @@ export function runXcodebuild(
     });
 
     let tail: string[] = [];
-    const onData = (target: NodeJS.WritableStream) => (data: Buffer) => {
-      if (!quiet) target.write(data);
-      tail.push(...data.toString('utf8').split('\n'));
+    const failedPreviews: string[] = [];
+    const partial = { stdout: '', stderr: '' };
+    const takeLines = (lines: string[]) => {
+      failedPreviews.push(...parseFailedPreviews(lines.join('\n')));
+      tail.push(...lines);
       if (tail.length > 200) tail = tail.slice(-200);
     };
-    child.stdout?.on('data', onData(process.stdout));
-    child.stderr?.on('data', onData(process.stderr));
+    const onData = (stream: 'stdout' | 'stderr', target: NodeJS.WritableStream) => (data: Buffer) => {
+      if (!quiet) target.write(data);
+      const lines = (partial[stream] + data.toString('utf8')).split('\n');
+      partial[stream] = lines.pop() ?? '';
+      takeLines(lines);
+    };
+    child.stdout?.on('data', onData('stdout', process.stdout));
+    child.stderr?.on('data', onData('stderr', process.stderr));
 
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code === 0) {
-        resolvePromise();
-        return;
-      }
+      takeLines([partial.stdout, partial.stderr].filter((l) => l.length > 0));
       const tailText = tail.join('\n');
-      const diagnosis = diagnoseXcodebuildFailure(tailText);
+      const diagnosis = code === 0 ? [] : diagnoseXcodebuildFailure(tailText);
       if (diagnosis.length > 0) {
         process.stderr.write(diagnosis.map((line) => `phonebook: ${line}`).join('\n') + '\n');
       }
-      if (quiet && tail.length > 0) process.stderr.write(tailText + '\n');
-      const message = [
-        `xcodebuild failed (exit ${code}) running: xcodebuild ${args.join(' ')}`,
-        ...diagnosis,
-      ].join('\n');
-      reject(new Error(message));
+      if (quiet && code !== 0 && tail.length > 0) process.stderr.write(tailText + '\n');
+      resolvePromise({ exitCode: code, failedPreviews, diagnosis });
     });
   });
 }

@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { buildEmptySnapshotsMessage, mapSidecar, resolveOnlyTesting } from './ios.js';
+import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildEmptySnapshotsMessage, generateIos, IncompleteRenderError, mapSidecar, resolveOnlyTesting } from './ios.js';
 
 const sidecar = (over: object = {}, preview: object = {}) => ({
   display_name: 'UserCard/Dark',
@@ -119,5 +122,74 @@ describe('mapSidecar previewName is an identity, not a label', () => {
   it('no longer merely repeats component and state', () => {
     const e = mapSidecar('x.png', sidecar());
     expect(e.previewName).not.toBe(`${e.component}/${e.state}`);
+  });
+});
+
+/**
+ * Against IceCubes, three previews trapped and every trap cost a host-app
+ * relaunch of about a minute and a half. The run outlived the MCP client's 300s
+ * tool timeout, so the agent got "timed out" three times in a row. Had it
+ * waited, xcodebuild would have printed which previews crashed, and 13 had
+ * rendered into a directory Phonebook deletes when the run fails.
+ *
+ * These run a stand-in `xcodebuild` from PATH that behaves like that run.
+ */
+describe('generateIos when the run does not finish', () => {
+  const PNG_1x1 = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const config = {
+    appName: 'Sample',
+    platform: 'ios' as const,
+    ios: { scheme: 'Sample', project: 'Sample.xcodeproj', onlyTesting: '' },
+  };
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  /** Puts an `xcodebuild` running `body` first on PATH, with a rendered preview
+   * at $RENDERED to copy into the export directory. */
+  async function fakeXcodebuild(body: string): Promise<{ projectDir: string; outputDir: string }> {
+    const bin = await mkdtemp(join(tmpdir(), 'fake-xcodebuild-'));
+    const rendered = join(bin, 'rendered.png');
+    await writeFile(rendered, PNG_1x1);
+    await writeFile(
+      join(bin, 'xcodebuild'),
+      `#!/bin/bash\nRENDERED="${rendered}"\nOUT="$TEST_RUNNER_SNAPSHOTS_EXPORT_DIR"\n${body}\n`,
+    );
+    await chmod(join(bin, 'xcodebuild'), 0o755);
+    vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
+    const projectDir = await mkdtemp(join(tmpdir(), 'fake-project-'));
+    return { projectDir, outputDir: join(projectDir, 'phonebook-out') };
+  }
+
+  const renderOne = `cp "$RENDERED" "$OUT/Sample_Card.swift_Card_Default.png"
+echo '{"display_name":"Card/Default","group":"Sample/Card.swift"}' > "$OUT/Sample_Card.swift_Card_Default.json"
+echo "Test case 'Snapshots.portrait-Card-0-0()' passed on 'iPhone' (0.000 seconds)"`;
+  const crashOne = `echo "Test case 'Snapshots.portrait-Avatar View-0-1()' failed on 'iPhone' (0.000 seconds)"`;
+
+  it('keeps what rendered and names the previews that crashed', async () => {
+    const { projectDir, outputDir } = await fakeXcodebuild(`${renderOne}\n${crashOne}\nexit 65`);
+
+    const error = await generateIos(config, projectDir, outputDir, { quiet: true }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(IncompleteRenderError);
+    const incomplete = error as IncompleteRenderError;
+    expect(incomplete.failedPreviews).toEqual(['Avatar View']);
+    expect(incomplete.manifest.entries.map((e) => e.previewName)).toEqual(['Sample/Card.swift:Card/Default']);
+    const written = JSON.parse(await readFile(join(outputDir, 'manifest.json'), 'utf8'));
+    expect(written.entries).toHaveLength(1);
+  });
+
+  it('still reports the build failure when nothing got as far as rendering', async () => {
+    const { projectDir, outputDir } = await fakeXcodebuild(
+      `echo "Unable to find module dependency: 'SnapshotPreviews'"\nexit 65`,
+    );
+
+    const error = await generateIos(config, projectDir, outputDir, { quiet: true }).catch((e: unknown) => e);
+
+    expect(error).not.toBeInstanceOf(IncompleteRenderError);
+    expect((error as Error).message).toContain('xcodebuild failed (exit 65)');
+    expect((error as Error).message).toContain("imports 'SnapshotPreviews'");
   });
 });

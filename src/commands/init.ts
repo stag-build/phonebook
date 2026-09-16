@@ -435,10 +435,29 @@ This project uses a Gradle version catalog ("${prefix}"). Equivalent additions u
 `;
 }
 
-/** The SnapshotTest subclass snippet printed by `init` and reused by `doctor`'s snapshot-test-class check. */
+/**
+ * The SnapshotTest subclass snippet printed by `init` and reused by `doctor`'s
+ * snapshot-test-class check.
+ *
+ * `nonisolated` is load-bearing. Xcode 26 turns on
+ * `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` for new projects, which makes
+ * every declaration MainActor-isolated unless it says otherwise, and
+ * SnapshotTest's own members are nonisolated. Without it the subclass does not
+ * compile: six errors on IceCubesApp, three for the overridden class methods
+ * and three for inherited initializers.
+ *
+ * Those initializers are why it goes on the class and not on each method.
+ * `init()`, `init(invocation:)` and `init(selector:)` appear nowhere in this
+ * source, so there is nothing to annotate one at a time; only class-level
+ * `nonisolated` reaches them.
+ *
+ * It costs nothing where it is not needed. `nonisolated` on a type has been
+ * legal since Swift 6.1 and Phonebook requires Xcode 26.3, so on a project
+ * that never enabled the setting it restates what was already true.
+ */
 export const IOS_SNAPSHOT_TEST_CLASS_SNIPPET = `     import SnapshottingTests
 
-     class Snapshots: SnapshotTest {
+     nonisolated class Snapshots: SnapshotTest {
        override class func snapshotPreviews() -> [String]? { nil }
      }`;
 
