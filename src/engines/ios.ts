@@ -78,6 +78,16 @@ export async function resolveOnlyTesting(
   }
 }
 
+/**
+ * A SNAPSHOTS_ONLY_FILTER pattern that matches no preview at all.
+ *
+ * Patterns are anchored regular expressions matched against a preview's
+ * synthesized fileID, and a fileID is never empty, so "^$" can match nothing.
+ * It is what a narrowed render with nothing to narrow to asks for: an empty
+ * bundle, rather than the whole project.
+ */
+const NEVER_MATCHES = '^$';
+
 /** Escapes a literal so it matches itself inside a regular expression. Exported for tests. */
 export function escapeRegex(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -85,13 +95,21 @@ export function escapeRegex(literal: string): string {
 
 /**
  * The SNAPSHOTS_ONLY_FILTER value that renders only the previews declared in
- * `files`, or undefined to render everything.
+ * `files`.
  *
  * SnapshotPreviews filters before it creates a test method, so a pattern that
  * misses is a preview that never renders — which makes a half-resolved filter
- * worse than none. A file whose module cannot be read (a project that is not
- * using Xcode's synchronized folders, a target xcodebuild will not describe)
- * therefore drops the whole filter rather than quietly dropping that file.
+ * worse than none. A file whose module cannot be read is therefore a failure
+ * rather than a filter with a hole in it.
+ *
+ * It fails rather than widening, which is what it used to do. Dropping the
+ * filter and rendering everything looked like the safe choice: no preview is
+ * lost and the caller still gets a bundle. What it actually does is answer a
+ * different question than the one asked, at a cost that scales with the project
+ * rather than the request — one file becomes every preview in the repository
+ * and every simulator boot that takes, and nothing in the result says so. A
+ * warning on stderr is not consent. A caller that wants the whole project can
+ * already say so, by leaving --files and --changed off.
  *
  * Each pattern is anchored against the preview's synthesized fileID,
  * "<Module>/<File>.swift", because the match is a substring search: unanchored,
@@ -100,11 +118,17 @@ export function escapeRegex(literal: string): string {
 export async function buildSnapshotsOnlyFilter(
   files: string[],
   moduleOf: (file: string) => Promise<string | undefined>,
-): Promise<string | undefined> {
+): Promise<string> {
   const swift = files.filter((file) => file.endsWith('.swift'));
   if (swift.length === 0) {
-    console.warn('warning: no changed Swift files to narrow to; rendering every preview.');
-    return undefined;
+    // A well-formed narrow request whose answer is empty: the caller named
+    // files, none of them can hold a #Preview, so nothing matches. That is a
+    // result, not a failure — the same call Android's --tests filtering makes
+    // when a module has none of the requested previews. It is emphatically not
+    // a reason to render everything, which is the one answer the caller can be
+    // sure they did not ask for.
+    console.warn('warning: none of the files given are Swift sources; nothing to render.');
+    return NEVER_MATCHES;
   }
 
   const patterns: string[] = [];
@@ -119,12 +143,12 @@ export async function buildSnapshotsOnlyFilter(
   }
 
   if (unresolved.length > 0) {
-    console.warn(
-      `warning: could not resolve the Swift module for ${unresolved.join(', ')} — ` +
-        'no filesystem-synchronized folder in the Xcode project covers it, or xcodebuild would not report its ' +
-        'build settings. Rendering every preview instead.',
+    throw new Error(
+      `Could not work out which target compiles ${unresolved.join(', ')}, so the previews for those ` +
+        'files cannot be singled out. No filesystem-synchronized folder covers them and no target\'s ' +
+        'build phase lists them — check they are part of the Xcode project, and that ' +
+        '`xcodebuild -showBuildSettings` works for their target. Drop --files to render the whole project.',
     );
-    return undefined;
   }
   return patterns.join('\n');
 }
