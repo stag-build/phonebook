@@ -86,6 +86,45 @@ function extractPbxprojObjects(pbxproj: string, isa: string): Map<string, string
   return map;
 }
 
+/**
+ * Like extractPbxprojObjects, but for the isas Xcode writes on a single line.
+ *
+ * A pbxproj uses two layouts and the choice is per isa, not per project:
+ * PBXGroup and PBXNativeTarget get a line per field, while PBXFileReference and
+ * PBXBuildFile are written whole on one line —
+ * `ID /* Name *\/ = {isa = PBXFileReference; path = Name.swift; ...};`. A
+ * regex anchored on "\n\t\t\tisa" therefore finds every group in a project and
+ * none of its files, which reads as a project with no source files rather than
+ * as a parser that only knows one layout.
+ *
+ * This accepts either. Bodies come back with their fields in whatever spacing
+ * they were written, so read them with pbxprojField rather than a
+ * newline-anchored pattern of your own.
+ */
+function extractPbxprojEntries(pbxproj: string, isa: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const re = new RegExp(
+    `\\n\\t\\t([0-9A-F]{24}) [^\\n]*?=\\s*\\{\\s*isa = ${isa};([\\s\\S]*?)\\n?\\t*\\};`,
+    'g',
+  );
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(pbxproj))) {
+    map.set(match[1], match[2]);
+  }
+  return map;
+}
+
+/**
+ * One field's value out of an object body, whichever layout it was written in.
+ * Comments are stripped because a single-line entry carries its name in one.
+ */
+function pbxprojField(body: string, key: string): string | undefined {
+  const match = body
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .match(new RegExp(`(?:^|[\\n;{]|\\s)${key} = ([^\\n;]+);`));
+  return match ? unquote(match[1]) : undefined;
+}
+
 function unquote(value: string): string {
   const trimmed = value.trim();
   return trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed;
@@ -227,9 +266,10 @@ export function findSnapshotTestClassLocation(pbxproj: string): SnapshotTestClas
  * source file's target — and therefore its Swift module — can be read off the
  * pbxproj without any per-file build-phase membership.
  *
- * Classic PBXGroup/PBXSourcesBuildPhase projects have no such folder mapping and
- * are deliberately out of scope: they resolve to no owner at all, and callers
- * fall back to rendering everything.
+ * This covers one of the two ways Xcode records membership. The other —
+ * per-file PBXBuildFile entries listed in a target's PBXSourcesBuildPhase — is
+ * what every project written before Xcode 16 uses, and what XcodeGen and Tuist
+ * still generate today. See sourcesBuildPhaseOwner for that half.
  */
 export interface SynchronizedGroupOwner {
   targetName: string;
@@ -306,6 +346,126 @@ export function targetForFile(pbxproj: string, filePath: string): string | undef
   for (const candidate of candidates) {
     if (candidate.exclusions.has(normalized)) continue;
     return candidate.targetName;
+  }
+  // Synchronized folders are the Xcode 16 way and not the only way. A project
+  // that lists its files explicitly answers the same question through its
+  // build phases, so a file not covered by any folder is not a file whose
+  // target is unknowable.
+  return sourcesBuildPhaseOwner(pbxproj, normalized);
+}
+
+/**
+ * Every file reference in the project, by its path relative to the project
+ * directory.
+ *
+ * A PBXFileReference carries only its own last path component; the rest comes
+ * from the PBXGroups above it, each contributing its own `path` when it has
+ * one. So the map is built by walking down from every group rather than up
+ * from each file: a group with no `path` is a pure grouping folder that Xcode
+ * shows in the navigator and that contributes nothing to the path on disk,
+ * which is exactly what makes walking up from a file ambiguous.
+ *
+ * A group whose sourceTree is SOURCE_ROOT restarts the path at the project
+ * directory, because that is what the field means; one that is "<absolute>"
+ * describes a file outside the project entirely and is skipped, since nothing
+ * here can express it as a project-relative path.
+ */
+export function fileReferencePaths(pbxproj: string): Map<string, string> {
+  const groups = new Map<string, string>([
+    ...extractPbxprojEntries(pbxproj, 'PBXGroup'),
+    ...extractPbxprojEntries(pbxproj, 'PBXVariantGroup'),
+  ]);
+  const files = extractPbxprojEntries(pbxproj, 'PBXFileReference');
+
+  const childIds = (body: string): string[] =>
+    [...(body.match(/children = \(([\s\S]*?)\);/)?.[1] ?? '').matchAll(/([0-9A-F]{24})/g)].map(
+      (m) => m[1],
+    );
+
+  const paths = new Map<string, string>();
+  // A malformed project can name a group as its own descendant. Visiting each
+  // id once keeps that a missing entry rather than a hang.
+  const visited = new Set<string>();
+
+  const walk = (id: string, prefix: string): void => {
+    if (visited.has(id)) return;
+    visited.add(id);
+
+    const groupBody = groups.get(id);
+    if (groupBody !== undefined) {
+      const tree = pbxprojField(groupBody, 'sourceTree') ?? '<group>';
+      if (tree === '<absolute>') return;
+      const own = pbxprojField(groupBody, 'path');
+      const base = tree === 'SOURCE_ROOT' ? (own ?? '') : own ? join(prefix, own) : prefix;
+      for (const child of childIds(groupBody)) walk(child, base);
+      return;
+    }
+
+    const fileBody = files.get(id);
+    if (fileBody === undefined) return;
+    const tree = pbxprojField(fileBody, 'sourceTree') ?? '<group>';
+    if (tree === '<absolute>') return;
+    const own = pbxprojField(fileBody, 'path');
+    if (own === undefined) return;
+    paths.set(id, tree === 'SOURCE_ROOT' ? own : join(prefix, own));
+  };
+
+  for (const id of groups.keys()) {
+    if (!visited.has(id)) walk(id, '');
+  }
+  return paths;
+}
+
+/**
+ * The target whose PBXSourcesBuildPhase compiles `filePath`, for a project that
+ * records membership per file rather than per folder.
+ *
+ * This is the classic Xcode layout and still the common one: XcodeGen and Tuist
+ * both generate it, and every project predating Xcode 16 uses it. A file
+ * reaches a target through two hops — a PBXBuildFile wraps the file reference,
+ * and the target's sources phase lists that build file — so both are followed
+ * rather than guessed at.
+ *
+ * `filePath` is relative to the project directory.
+ */
+export function sourcesBuildPhaseOwner(pbxproj: string, filePath: string): string | undefined {
+  const normalized = filePath.replace(/^\.\//, '');
+  const paths = fileReferencePaths(pbxproj);
+
+  let fileRefId: string | undefined;
+  for (const [id, path] of paths) {
+    if (path === normalized) {
+      fileRefId = id;
+      break;
+    }
+  }
+  if (!fileRefId) return undefined;
+
+  // One file reference can be compiled by several targets — an app and its
+  // test target, a framework and the app embedding it — so every build file
+  // pointing at it is a candidate.
+  const buildFileIds = new Set<string>();
+  for (const [id, body] of extractPbxprojEntries(pbxproj, 'PBXBuildFile')) {
+    if (pbxprojField(body, 'fileRef') === fileRefId) buildFileIds.add(id);
+  }
+  if (buildFileIds.size === 0) return undefined;
+
+  const sourcePhases = extractPbxprojEntries(pbxproj, 'PBXSourcesBuildPhase');
+  for (const [targetId, targetBody] of extractPbxprojEntries(pbxproj, 'PBXNativeTarget')) {
+    const phaseIds = [
+      ...(targetBody.match(/buildPhases = \(([\s\S]*?)\);/)?.[1] ?? '').matchAll(
+        /([0-9A-F]{24})/g,
+      ),
+    ].map((m) => m[1]);
+    for (const phaseId of phaseIds) {
+      const phaseBody = sourcePhases.get(phaseId);
+      if (!phaseBody) continue;
+      const compiled = [
+        ...(phaseBody.match(/files = \(([\s\S]*?)\);/)?.[1] ?? '').matchAll(/([0-9A-F]{24})/g),
+      ].map((m) => m[1]);
+      if (!compiled.some((id) => buildFileIds.has(id))) continue;
+      return pbxprojField(targetBody, 'name') ?? targetId;
+    }
   }
   return undefined;
 }

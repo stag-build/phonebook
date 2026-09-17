@@ -215,20 +215,26 @@ describe('buildSnapshotsOnlyFilter', () => {
     expect(filter).toBe('^App/UserCard\\.swift$\n^App/Button\\.swift$');
   });
 
-  it('drops the whole filter when any file cannot be resolved', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const filter = await buildSnapshotsOnlyFilter(
-      ['App/Card.swift', 'Legacy/Old.swift'],
-      async (file) => (file.startsWith('App/') ? 'App' : undefined),
-    );
-    expect(filter).toBeUndefined();
-    expect(warn.mock.calls[0][0]).toContain('Legacy/Old.swift');
-    warn.mockRestore();
+  // This used to drop the filter and render the whole project. A caller that
+  // asked for one file and silently got a thousand previews — and every
+  // simulator boot that costs — was given a different answer than the one it
+  // asked for, with nothing in the result to say so.
+  it('fails when any file cannot be resolved, rather than widening to everything', async () => {
+    await expect(
+      buildSnapshotsOnlyFilter(['App/Card.swift', 'Legacy/Old.swift'], async (file) =>
+        file.startsWith('App/') ? 'App' : undefined,
+      ),
+    ).rejects.toThrow(/Legacy\/Old\.swift/);
   });
 
-  it('renders everything when no Swift file changed', async () => {
+  // A narrow request whose answer is genuinely empty is not the same thing. The
+  // caller named files, none of them can hold a #Preview, and nothing matching
+  // is the honest result — the same call the Android engine makes when a
+  // module has none of the requested previews.
+  it('matches nothing when no Swift file changed', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(await buildSnapshotsOnlyFilter(['README.md'], async () => 'App')).toBeUndefined();
+    expect(await buildSnapshotsOnlyFilter(['README.md'], async () => 'App')).toBe('^$');
+    expect(warn.mock.calls[0][0]).toContain('Swift');
     warn.mockRestore();
   });
 });
