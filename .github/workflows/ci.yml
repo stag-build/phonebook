@@ -19,3 +19,49 @@ jobs:
       - run: node scripts/check-versions-agree.mjs
       - run: npm run build
       - run: npm test
+
+  # Everything above is unit tests: synthetic .pbxproj text, no real Xcode, no
+  # real SnapshotPreviews harness. That is exactly the gap that let two real
+  # bugs through unnoticed — a SNAPSHOTS_ONLY_FILTER anchor that could never
+  # match a *named* preview, and target resolution that had no path at all for
+  # a file inside a local Swift package — because nothing here ever ran the
+  # actual `generate --files` an agent runs against a real project. This job
+  # does: a real `xcodebuild test` against samples/ios, through the same
+  # --files code path, asserted against the specific shape a correct narrow
+  # render has to produce. It runs on every PR, not just on push to main, so a
+  # regression here blocks the merge instead of shipping and being found later
+  # by someone's real repository.
+  ios-integration:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Ensure iPhone 17 Pro simulator exists
+        run: |
+          if ! xcrun simctl list devices available | grep -q "iPhone 17 Pro"; then
+            RUNTIME=$(xcrun simctl list runtimes available -j | python3 -c "import json,sys; rt=[r for r in json.load(sys.stdin)['runtimes'] if r['name'].startswith('iOS')]; print(sorted(rt, key=lambda r: r['version'])[-1]['identifier'])")
+            xcrun simctl create "iPhone 17 Pro" "iPhone 17 Pro" "$RUNTIME"
+          fi
+
+      # The regression case itself: UserCard.swift declares two *named*
+      # previews ("UserCard/Default", "UserCard/Dark") alongside two other
+      # sample components (Button, StatusBadge) that must NOT appear in the
+      # output. A SNAPSHOTS_ONLY_FILTER anchor that cannot match a named
+      # preview renders nothing here; one that silently falls back to
+      # "everything" renders all three components' previews instead of two.
+      # Either failure mode is real and both shipped before this test existed.
+      - name: Render only UserCard.swift's previews, by name
+        run: |
+          node dist/cli.js generate -C samples/ios -o /tmp/narrowed-render --files PhonebookSample/Components/UserCard.swift
+          node scripts/verify-narrowed-render-manifest.mjs /tmp/narrowed-render/manifest.json

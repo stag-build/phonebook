@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   fileReferencePaths,
+  localSwiftPackageModule,
   sourcesBuildPhaseOwner,
   synchronizedGroupOwners,
   targetForFile,
@@ -175,5 +176,61 @@ describe('targetForFile on a classic project', () => {
         classicTarget(CLASSIC_APP, 'Legacy', [PHASE]),
     );
     expect(targetForFile(project, 'Sources/Views/UserCard.swift')).toBe('App');
+  });
+});
+
+// --- localSwiftPackageModule: a file SwiftPM compiles, not xcodebuild ---
+//
+// A local package's files are never PBXFileReferences and never appear in a
+// PBXSourcesBuildPhase — synchronizedGroupOwners and sourcesBuildPhaseOwner
+// structurally cannot see them, which is what made `Packages/SnapshotPreviews`
+// throw "could not work out which target compiles" on a real repository: the
+// package existed, its files existed, and neither resolver had anywhere to
+// look. This is the third lookup that covers that case.
+
+const LOCAL_PACKAGE_REF = '888888888888888888888888';
+
+const localPackageReference = (id: string, name: string, relativePath: string) =>
+  `\n\t\t${id} /* XCLocalSwiftPackageReference "${name}" */ = {\n\t\t\tisa = XCLocalSwiftPackageReference;\n\t\t\trelativePath = ${relativePath};\n\t\t};`;
+
+function projectWithLocalPackage(relativePath: string): string {
+  return pbxproj(localPackageReference(LOCAL_PACKAGE_REF, 'SnapshotPreviews', relativePath));
+}
+
+describe('localSwiftPackageModule', () => {
+  it('reads the module off the default Sources/<TargetName> layout', () => {
+    const project = projectWithLocalPackage('Packages/SnapshotPreviews');
+    expect(
+      localSwiftPackageModule(project, 'Packages/SnapshotPreviews/Sources/SnapshottingTests/SnapshotTest.swift'),
+    ).toBe('SnapshottingTests');
+    expect(
+      localSwiftPackageModule(project, 'Packages/SnapshotPreviews/Sources/SnapshotPreviews/SnapshotPreviews.swift'),
+    ).toBe('SnapshotPreviews');
+  });
+
+  it('reads a test target the same way, under Tests/<TargetName>', () => {
+    const project = projectWithLocalPackage('Packages/SnapshotPreviews');
+    expect(
+      localSwiftPackageModule(project, 'Packages/SnapshotPreviews/Tests/SnapshotPreviewsTests/Fixture.swift'),
+    ).toBe('SnapshotPreviewsTests');
+  });
+
+  it('is undefined for the manifest itself and for files outside the package', () => {
+    const project = projectWithLocalPackage('Packages/SnapshotPreviews');
+    expect(localSwiftPackageModule(project, 'Packages/SnapshotPreviews/Package.swift')).toBeUndefined();
+    expect(localSwiftPackageModule(project, 'Sources/App/AppDelegate.swift')).toBeUndefined();
+  });
+
+  // The bug this exists to fix: a real repository's classic-project resolvers
+  // both structurally miss this, and used to throw rather than widen — the
+  // right failure mode for an unresolvable file, but the wrong one here, since
+  // this file was always resolvable, just not by either of them.
+  it('resolves what synchronizedGroupOwners and sourcesBuildPhaseOwner cannot', () => {
+    const project = projectWithLocalPackage('Packages/SnapshotPreviews');
+    const file = 'Packages/SnapshotPreviews/Sources/SnapshottingTests/SnapshotTest.swift';
+    expect(synchronizedGroupOwners(project)).toEqual([]);
+    expect(sourcesBuildPhaseOwner(project, file)).toBeUndefined();
+    expect(targetForFile(project, file)).toBeUndefined();
+    expect(localSwiftPackageModule(project, file)).toBe('SnapshottingTests');
   });
 });
