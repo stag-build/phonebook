@@ -355,6 +355,57 @@ export function targetForFile(pbxproj: string, filePath: string): string | undef
 }
 
 /**
+ * Every local Swift package the project references, by the path (relative to
+ * the project directory) its Package.swift lives under.
+ *
+ * A local package is added to a project as an XCLocalSwiftPackageReference —
+ * one object, one field (`relativePath`), no per-file membership at all: the
+ * files inside it are never PBXFileReferences and never appear in any
+ * PBXSourcesBuildPhase, because SwiftPM compiles them, not xcodebuild acting
+ * directly on the .xcodeproj. Neither of the two resolvers above can ever see
+ * them, structurally, not as a gap to close but because they are answering a
+ * question ("which Xcode target's build phase compiles this file") that does
+ * not apply here.
+ */
+export function localSwiftPackageRoots(pbxproj: string): string[] {
+  const roots: string[] = [];
+  for (const [, body] of extractPbxprojEntries(pbxproj, 'XCLocalSwiftPackageReference')) {
+    const path = pbxprojField(body, 'relativePath');
+    if (path) roots.push(path.replace(/\/+$/, ''));
+  }
+  return roots;
+}
+
+/**
+ * The Swift module a file inside a local package compiles into, by SwiftPM's
+ * own naming convention: a target's module name is the target's own name, and
+ * by default a target's sources live at "Sources/<TargetName>/..." (or
+ * "Tests/<TargetName>/..." for a test target) under the package root. That
+ * directory name is the module — not something to shell out to xcodebuild to
+ * ask, because xcodebuild does not build this target directly; SwiftPM does,
+ * as a dependency, and does not expose a `-showBuildSettings` query for one of
+ * its own targets the way it does for a target listed in the .xcodeproj.
+ *
+ * This reads the convention, not the package manifest: a Package.swift that
+ * overrides a target's `path:` to something other than "Sources/<name>" is out
+ * of scope, the same way a project whose classic build phase or synchronized
+ * folder is malformed is out of scope for the two resolvers above — the
+ * manifest is executable Swift, and evaluating it is not a cost this
+ * comment-scale check is worth paying. The overwhelming majority of packages,
+ * including every one Phonebook itself scaffolds, use the default.
+ */
+export function localSwiftPackageModule(pbxproj: string, filePath: string): string | undefined {
+  const normalized = filePath.replace(/^\.\//, '');
+  for (const root of localSwiftPackageRoots(pbxproj)) {
+    if (normalized !== root && !normalized.startsWith(`${root}/`)) continue;
+    const withinPackage = normalized.slice(root.length + 1);
+    const match = withinPackage.match(/^(?:Sources|Tests)\/([^/]+)\//);
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+/**
  * Every file reference in the project, by its path relative to the project
  * directory.
  *
@@ -487,6 +538,15 @@ export async function moduleForFile(
   xcodebuildTarget: { project?: string; workspace?: string; scheme?: string },
   cache?: Map<string, string | undefined>,
 ): Promise<string | undefined> {
+  // Checked first, and returned directly with no xcodebuild round trip: a
+  // local package's module name is read off its own directory layout, not
+  // asked of a target xcodebuild does not build itself. Trying the Xcode-target
+  // path first would mean treating "SnapshottingTests" as if it were a target
+  // in the .xcodeproj, which it is not, and getting a wrong or missing answer
+  // from a query that was never going to apply.
+  const packageModule = localSwiftPackageModule(pbxproj, filePath);
+  if (packageModule) return packageModule;
+
   const targetName = targetForFile(pbxproj, filePath);
   if (!targetName) return undefined;
   if (cache?.has(targetName)) return cache.get(targetName);

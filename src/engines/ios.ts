@@ -112,8 +112,19 @@ export function escapeRegex(literal: string): string {
  * already say so, by leaving --files and --changed off.
  *
  * Each pattern is anchored against the preview's synthesized fileID,
- * "<Module>/<File>.swift", because the match is a substring search: unanchored,
- * "Card.swift" would also claim UserCard.swift.
+ * "<Module>/<File>.swift" — but that is not the whole string SnapshotPreviews
+ * matches against. When a #Preview carries an explicit display name (which
+ * Phonebook's own naming convention tells every caller to give it — see
+ * get_preview_guidance), SnapshotPreviews matches the fileID *plus* a
+ * ":DisplayName" suffix (SnapshotPreviewsCore.swift's findPreviews: `name =
+ * "\(fileId):\(displayName)"`, checked with `firstMatch`, a substring search).
+ * A pattern ending the string right after ".swift" can then never match a
+ * named preview — only the rare unnamed `#Preview { }` — which is a silent,
+ * total miss on exactly the previews an agent following our own guidance would
+ * write. The anchor is `(?::|$)` for that reason: end of string, or the start
+ * of the ":DisplayName" suffix, either one closes the match. Unanchored
+ * entirely, "Card.swift" would also claim "UserCard.swift"; anchoring at
+ * ".swift$" alone reintroduced a different, worse miss.
  */
 export async function buildSnapshotsOnlyFilter(
   files: string[],
@@ -139,7 +150,7 @@ export async function buildSnapshotsOnlyFilter(
       unresolved.push(file);
       continue;
     }
-    patterns.push(`^${escapeRegex(module)}/${escapeRegex(basename(file))}$`);
+    patterns.push(`^${escapeRegex(module)}/${escapeRegex(basename(file))}(?::|$)`);
   }
 
   if (unresolved.length > 0) {

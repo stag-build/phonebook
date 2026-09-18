@@ -212,7 +212,25 @@ describe('buildSnapshotsOnlyFilter', () => {
       ['App/Views/UserCard.swift', 'App/Button.swift', 'README.md'],
       async () => 'App',
     );
-    expect(filter).toBe('^App/UserCard\\.swift$\n^App/Button\\.swift$');
+    expect(filter).toBe('^App/UserCard\\.swift(?::|$)\n^App/Button\\.swift(?::|$)');
+  });
+
+  // The bug this whole filter exists to avoid: a named #Preview silently never
+  // rendering. SnapshotPreviews matches the fileID plus ":DisplayName" for any
+  // preview that has one — which is every preview Phonebook's own naming
+  // convention tells a caller to write — so a pattern ending flush at ".swift"
+  // can never match one. Confirmed against the real matcher
+  // (SnapshotPreviewsCore.swift's `firstMatch(of:)` over `Regex(pattern)`),
+  // not just asserted here: both cases below are checked against Foundation's
+  // own Regex/firstMatch, the same primitive SnapshotPreviews uses.
+  it('matches a named preview\'s fileID:DisplayName form, not just the bare fileID', async () => {
+    const filter = await buildSnapshotsOnlyFilter(['App/Card.swift'], async () => 'App');
+    const regex = new RegExp(filter);
+    expect(regex.test('App/Card.swift')).toBe(true);
+    expect(regex.test('App/Card.swift:Card/Default')).toBe(true);
+    // Still anchored: a same-prefix file must not match.
+    expect(regex.test('App/CardHeader.swift')).toBe(false);
+    expect(regex.test('App/CardHeader.swift:CardHeader/Default')).toBe(false);
   });
 
   // This used to drop the filter and render the whole project. A caller that
