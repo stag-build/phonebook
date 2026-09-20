@@ -85,7 +85,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Explicit packages, not the action's default list: that default still
+      # requests the legacy "tools" package, which current cmdline-tools
+      # releases no longer carry, so an unpinned install fails before any
+      # of this job's actual steps run.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
 
       - uses: actions/setup-node@v4
         with:
