@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import type { PhonebookConfig } from '../config.js';
 import { changedFiles } from '../scan/scope.js';
@@ -151,6 +151,58 @@ export function planPreviewFilter(
   return { byModule, warnings };
 }
 
+/** A module's build directory, e.g. ":app" -> "<projectDir>/app/build". */
+function moduleBuildDir(projectDir: string, module: string): string {
+  return join(projectDir, ...module.split(':').filter(Boolean), 'build');
+}
+
+/** Where `recordRoborazzi<Variant>` publishes a module's PNGs — what we harvest. */
+export function roborazziOutputDir(projectDir: string, module: string): string {
+  return join(moduleBuildDir(projectDir, module), 'outputs', 'roborazzi');
+}
+
+/**
+ * Where the Robolectric test task actually writes PNGs; `finalizeTestRoborazzi
+ * <Variant>` then copies this directory into `outputs/roborazzi`.
+ *
+ * Clearing only the output directory is not enough: `finalize` repopulates it
+ * from here, so a stale PNG staged by an earlier run comes straight back — the
+ * bug looks fixed for one run and returns on the next. Verified against
+ * Roborazzi 1.72.0 on samples/android.
+ *
+ * Deliberately *not* `build/generated/roborazzi` (the generated test sources)
+ * or `build/test-results/roborazzi` (the JSON result records) — neither is
+ * harvested, and deleting the former would force a needless codegen rebuild.
+ */
+export function roborazziStagingDir(projectDir: string, module: string): string {
+  return join(moduleBuildDir(projectDir, module), 'intermediates', 'roborazzi');
+}
+
+/**
+ * Empties a module's Roborazzi output directory *before* Gradle records into
+ * it, so that whatever is there afterwards came from this invocation alone.
+ *
+ * Harvesting copies the whole directory (previews named "Component/State"
+ * become real subdirectories, so there is no reliable name-based way to tell a
+ * fresh PNG from an old one). Without this, a `--files` run — which narrows
+ * Gradle to one file's test parameters, and therefore only rewrites that
+ * file's PNGs — would still harvest every PNG a *previous* run left behind and
+ * report them in the manifest as if they had just been rendered. The manifest
+ * schema carries no timestamp or run id, so a consumer cannot tell the
+ * difference.
+ *
+ * Clearing first rather than filtering afterwards is safe: this directory is
+ * disposable Gradle build output, never a source of truth. Previews already
+ * harvested into a completed bundle live in that bundle's `images/` and are
+ * untouched. Only modules this run actually records are cleared — a module
+ * skipped by `--files`/`--changed` keeps its PNGs, which is what lets the
+ * bundle still describe the whole app.
+ */
+async function clearRoborazziOutput(projectDir: string, module: string): Promise<void> {
+  await rm(roborazziStagingDir(projectDir, module), { recursive: true, force: true });
+  await rm(roborazziOutputDir(projectDir, module), { recursive: true, force: true });
+}
+
 /**
  * Runs Roborazzi (with ComposablePreviewScanner-generated tests) via Gradle and
  * harvests the recorded PNGs into a Phonebook bundle.
@@ -159,13 +211,30 @@ export async function generateAndroid(
   config: PhonebookConfig,
   projectDir: string,
   outputDir: string,
-  options: { quiet?: boolean; allowEmpty?: boolean; changedOnly?: boolean; files?: string[] } = {},
+  options: {
+    quiet?: boolean;
+    allowEmpty?: boolean;
+    changedOnly?: boolean;
+    files?: string[];
+    /**
+     * Test seam. Replaces the Gradle invocation so the clear-then-record-then-
+     * harvest sequence can be exercised without an Android SDK: a fake can
+     * stage exactly the PNGs a correctly narrowed run would produce. Not
+     * reachable from the CLI. The real end-to-end path is covered by the
+     * android-integration CI job against samples/android.
+     */
+    recordWith?: (module: string, extraArgs: string[]) => Promise<void>;
+  } = {},
 ): Promise<Manifest> {
   const modules = config.android?.modules ?? [':app'];
   const variant = config.android?.variant ?? 'debug';
   const variantCap = variant[0].toUpperCase() + variant.slice(1);
   const quiet = options.quiet ?? false;
   const task = (module: string) => `${module}:recordRoborazzi${variantCap}`;
+  const record =
+    options.recordWith ??
+    ((module: string, extraArgs: string[]) =>
+      runGradle(projectDir, [task(module)], quiet, { extraArgs }));
 
   // Modules deliberately not recorded this run: their previously recorded PNGs
   // are still harvested, but a missing output directory is not an error.
@@ -190,7 +259,8 @@ export async function generateAndroid(
         continue;
       }
       const extraArgs = patterns.flatMap((p) => ['--tests', p]);
-      await runGradle(projectDir, [task(module)], quiet, { extraArgs });
+      await clearRoborazziOutput(projectDir, module);
+      await record(module, extraArgs);
     }
     if (skipped.size === modules.length) {
       console.warn(
@@ -199,7 +269,14 @@ export async function generateAndroid(
       );
     }
   } else {
-    await runGradle(projectDir, modules.map(task), quiet);
+    for (const module of modules) await clearRoborazziOutput(projectDir, module);
+    if (options.recordWith) {
+      for (const module of modules) await options.recordWith(module, []);
+    } else {
+      // One invocation for all modules: without `--tests` there are no
+      // task-scoped arguments to keep apart, so Gradle can schedule them together.
+      await runGradle(projectDir, modules.map(task), quiet);
+    }
   }
 
   const imagesDir = join(outputDir, 'images');
@@ -207,8 +284,7 @@ export async function generateAndroid(
 
   const entries: ManifestEntry[] = [];
   for (const module of modules) {
-    const moduleDir = join(projectDir, ...module.split(':').filter(Boolean));
-    const roborazziDir = join(moduleDir, 'build', 'outputs', 'roborazzi');
+    const roborazziDir = roborazziOutputDir(projectDir, module);
     let files: string[] = [];
     try {
       // Recursive: previews named "Component/State" are written into subdirectories.

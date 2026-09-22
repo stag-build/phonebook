@@ -65,3 +65,69 @@ jobs:
         run: |
           node dist/cli.js generate -C samples/ios -o /tmp/narrowed-render --files PhonebookSample/Components/UserCard.swift
           node scripts/verify-narrowed-render-manifest.mjs /tmp/narrowed-render/manifest.json
+
+  # The Android counterpart, and for the same reason: everything in
+  # build-and-test is unit tests with a faked Gradle invocation, which is what
+  # let a stale-harvest bug ship. `generate --files` narrowed Gradle correctly
+  # but then copied the module's *entire* Roborazzi output directory into the
+  # bundle, so PNGs from an earlier run were reported in the manifest as if
+  # this run had rendered them. Nothing downstream could notice: the images
+  # were byte-identical and the manifest carries no timestamp or run id. Only a
+  # real Gradle run against a dirty output directory catches that, so this job
+  # deliberately seeds one before running.
+  android-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Explicit packages, not the action's default list: that default still
+      # requests the legacy "tools" package, which current cmdline-tools
+      # releases no longer carry, so an unpinned install fails before any
+      # of this job's actual steps run.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # Record everything once, so the Roborazzi output directory holds all six
+      # of the sample's previews — the "leftover from an earlier run" state.
+      - name: Record every preview, to dirty the output directory
+        run: node dist/cli.js generate -C samples/android -o /tmp/android-full
+
+      # Now ask for one file. A correct run rewrites only PrimaryButton.kt's
+      # two previews; the harvest must not pick up the four Badge/UserCard PNGs
+      # still sitting in build/outputs/roborazzi from the step above.
+      - name: Render only PrimaryButton.kt's previews, over a dirty output dir
+        run: |
+          node dist/cli.js generate -C samples/android -o /tmp/android-narrowed --files app/src/main/java/dev/stag/phonebook/sample/PrimaryButton.kt
+          node scripts/verify-fresh-android-manifest.mjs /tmp/android-narrowed/manifest.json Button Enabled Disabled
+
+      # The inverse: an unfiltered run after a narrowed one must still produce
+      # the whole app, not just the file the previous run happened to touch.
+      - name: Record every preview again, after a narrowed run
+        run: |
+          node dist/cli.js generate -C samples/android -o /tmp/android-full-again
+          node -e "
+            const m = require('/tmp/android-full-again/manifest.json');
+            const got = m.entries.map(e => e.component + '/' + e.state).sort();
+            const want = ['Badge/Error','Badge/Success','Button/Disabled','Button/Enabled','User Card/Dark','User Card/Default'];
+            if (JSON.stringify(got) !== JSON.stringify(want)) {
+              console.error('unfiltered generate did not render the whole sample app');
+              console.error('  wanted: ' + want.join(', '));
+              console.error('  got:    ' + got.join(', '));
+              process.exit(1);
+            }
+            console.log('OK: unfiltered generate still renders all ' + got.length + ' previews.');
+          "
