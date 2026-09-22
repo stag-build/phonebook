@@ -31,15 +31,53 @@ jobs:
       - run: npm test
 
       # Skip if this version is already on npm — lets the job be re-run (or
-      # dispatched manually) purely to sync the MCP registry.
+      # dispatched manually) purely to sync the MCP registry. npm view can
+      # still say "not there" for a version this same tarball already staged
+      # moments ago (read-after-write lag) — that shows up as npm publish
+      # itself refusing with E409 "previously staged", which means the same
+      # thing as the npm view check above: nothing left to do here.
       - name: Publish to npm
         run: |
+          set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
           if npm view "@stag-build/phonebook@$VERSION" version >/dev/null 2>&1; then
             echo "@stag-build/phonebook@$VERSION already on npm, skipping publish"
-          else
-            npm publish --access public
+            exit 0
           fi
+          if OUTPUT=$(npm publish --access public 2>&1); then
+            echo "$OUTPUT"
+          else
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -q 'previously staged version'; then
+              echo "Already staged on npm at this version, treating as published"
+            else
+              exit 1
+            fi
+          fi
+
+      # npm's write path and its read path (npm view, and what the MCP
+      # registry itself checks) are not the same system, and the read side
+      # lags. A publish that just succeeded can 404 here for a few seconds —
+      # exactly what broke a real release: the MCP registry step failed on
+      # that lag, reported the whole job "failed" even though npm publish had
+      # already succeeded, and a manual re-run then collided with npm's own
+      # idempotency guard on the same tarball (E409 "previously staged").
+      # Waiting here for npm's read side to catch up removes the reason
+      # anyone would re-run this job at all.
+      - name: Wait for npm to serve the version this job just published
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          for i in $(seq 1 12); do
+            if npm view "@stag-build/phonebook@$VERSION" version >/dev/null 2>&1; then
+              echo "@stag-build/phonebook@$VERSION is live on npm."
+              exit 0
+            fi
+            echo "Not yet visible ($i/12), waiting 5s..."
+            sleep 5
+          done
+          echo "::error::@stag-build/phonebook@$VERSION never became visible on npm."
+          exit 1
 
       # The MCP registry only stores metadata; it validates ownership of the
       # io.github.stag-build/* namespace from this job's OIDC token, which is
