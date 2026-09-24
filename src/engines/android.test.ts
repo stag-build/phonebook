@@ -289,4 +289,31 @@ describe('generateAndroid harvesting', () => {
     expect(recorded).toBe(false);
     expect(manifest.entries.map((e) => `${e.component}/${e.state}`)).toEqual(['User Card/Default']);
   });
+
+  it('retries unfiltered when a scoped --tests run records nothing', async () => {
+    const projectDir = await sampleProject();
+    const outputDir = join(projectDir, 'phonebook-out');
+    const outDir = roborazziOutputDir(projectDir, ':app');
+
+    // Reproduces the real failure: Gradle's `--tests` can select the shared
+    // generated class, but not an individual parameterized preview inside it
+    // (its display name is resolved at run time, after Gradle has already
+    // picked which tests to run) — so the scoped invocation builds nothing,
+    // even though the file genuinely declares previews.
+    const seenExtraArgs: string[][] = [];
+    const manifest = await generateAndroid(config, projectDir, outputDir, {
+      quiet: true,
+      files: [PRIMARY_BUTTON],
+      recordWith: async (_module, extraArgs) => {
+        seenExtraArgs.push(extraArgs);
+        if (extraArgs.length > 0) return; // scoped call: records nothing
+        await writePng(outDir, FRESH, 2); // unfiltered retry: records for real
+      },
+    });
+
+    expect(seenExtraArgs).toHaveLength(2);
+    expect(seenExtraArgs[0]).toContain('--tests');
+    expect(seenExtraArgs[1]).toEqual([]);
+    expect(manifest.entries.map((e) => `${e.component}/${e.state}`)).toEqual(['Button/Enabled']);
+  });
 });
