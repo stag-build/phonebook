@@ -203,6 +203,16 @@ async function clearRoborazziOutput(projectDir: string, module: string): Promise
   await rm(roborazziOutputDir(projectDir, module), { recursive: true, force: true });
 }
 
+/** Whether a module's Roborazzi output directory holds at least one PNG. */
+async function hasRecordedOutput(projectDir: string, module: string): Promise<boolean> {
+  try {
+    const files = await readdir(roborazziOutputDir(projectDir, module), { recursive: true });
+    return files.map(String).some((f) => f.endsWith('.png'));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Runs Roborazzi (with ComposablePreviewScanner-generated tests) via Gradle and
  * harvests the recorded PNGs into a Phonebook bundle.
@@ -261,6 +271,25 @@ export async function generateAndroid(
       const extraArgs = patterns.flatMap((p) => ['--tests', p]);
       await clearRoborazziOutput(projectDir, module);
       await record(module, extraArgs);
+      if (extraArgs.length > 0 && !(await hasRecordedOutput(projectDir, module))) {
+        // Gradle's `--tests` can select this generated class (there is exactly
+        // one per module) and its bare `test` method, but not the individual
+        // parameterized previews inside it: ParameterizedRobolectricTestRunner
+        // resolves parameter names (and therefore the `test[...]` display
+        // names `testsPatternForClass` targets) at run time, after Gradle has
+        // already decided which tests to run. A pattern narrower than the
+        // class/method succeeds at zero cost by silently matching nothing —
+        // confirmed empirically against samples/android and kiwix-android: no
+        // variant of a parameter-scoped `--tests` pattern records anything,
+        // while the unfiltered class always does. Re-recording the whole
+        // module is the only reliable way to get this file's previews.
+        console.warn(
+          `warning: scoped Gradle test filter for ${module} matched no parameterized previews; ` +
+            're-recording the whole module instead',
+        );
+        await clearRoborazziOutput(projectDir, module);
+        await record(module, []);
+      }
     }
     if (skipped.size === modules.length) {
       console.warn(
