@@ -9,10 +9,19 @@ import {
   kotlinFacadeClass,
   moduleOfFile,
   planPreviewFilter,
+  previewSizeQualifiers,
   roborazziOutputDir,
   roborazziStagingDir,
   testsPatternForClass,
 } from './android.js';
+
+describe('previewSizeQualifiers', () => {
+  it('infers orientation from dimensions', () => {
+    expect(previewSizeQualifiers({ widthDp: 393, heightDp: 852 })).toBe('w393dp-h852dp-port');
+    expect(previewSizeQualifiers({ widthDp: 852, heightDp: 393 })).toBe('w852dp-h393dp-land');
+    expect(previewSizeQualifiers({ widthDp: 500, heightDp: 500 })).toBe('w500dp-h500dp-port');
+  });
+});
 
 describe('checkEmptyEntries', () => {
   it('throws with the diagnostic message when there are zero entries and allowEmpty is false', () => {

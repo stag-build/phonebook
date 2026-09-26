@@ -218,7 +218,11 @@ Add a `phonebook.config.json` next to `settings.gradle.kts`:
 {
   "appName": "My Android App",
   "platform": "android",
-  "android": { "modules": [":app"], "variant": "debug" }
+  "android": {
+    "modules": [":app"],
+    "variant": "debug",
+    "defaultPreviewSize": { "widthDp": 393, "heightDp": 852 }
+  }
 }
 ```
 
@@ -292,11 +296,14 @@ Phonebook groups screenshots into `component / state` cards from your existing p
 | `output` | string | `"phonebook-out"` | Bundle output directory, relative to the config file. |
 | `android.modules` | string[] | `[":app"]` | Gradle modules to record. |
 | `android.variant` | string | `"debug"` | Build variant; Phonebook runs `<module>:recordRoborazzi<Variant>`. |
+| `android.defaultPreviewSize` | `{ "widthDp": number, "heightDp": number }` | Roborazzi default | Compose viewport for Android previews without an explicit `@Preview(device = ...)` or `widthDp`/`heightDp`. Dimensions are positive integer dp values (at most 10000); orientation is inferred from them (square uses portrait). Applies to CLI `generate` and MCP `run_generate`; no project build file changes are needed. |
 | `ios.project` | string | — | Path to `.xcodeproj`, relative to the config file. One of `project`/`workspace` required. |
 | `ios.workspace` | string | — | Path to `.xcworkspace`, relative to the config file. |
 | `ios.scheme` | string | — | Required. Scheme that includes the SnapshotPreviews test target. |
 | `ios.simulator` | string | `"iPhone 17 Pro"` | Simulator device name used for `-destination`. |
 | `ios.onlyTesting` | string | auto-detected | `-only-testing:` filter so `generate` runs just the snapshot class, not the app's whole test suite. Auto-derived from the `SnapshotTest` subclass; set `""` to run everything. |
+
+`android.defaultPreviewSize` uses Roborazzi's preview tester customization API. If the project already configures a custom `testerQualifiedClassName`, Phonebook reports a conflict instead of replacing that tester.
 
 Both `generate` and `build` accept `-C <dir>` (project directory containing `phonebook.config.json`). `generate` takes `-o <dir>` to override the bundle output and `--allow-empty` to tolerate a run that records no previews. `build` takes an optional bundle path — with none, it uses the project's bundle directory — and `-o <dir>` for the site output; without `-o`, `build` writes `index.html` straight into the bundle directory and reuses its `images/` in place (no copying), which is what the quickstarts above do. Pass `-o <dir>` to instead copy the bundle's images into a separate, standalone site directory.
 

@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
-import type { PhonebookConfig } from '../config.js';
+import { validateAndroidPreviewSize, type PhonebookConfig } from '../config.js';
 import { changedFiles } from '../scan/scope.js';
 import { diagnoseGradleFailure } from '../errors.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
@@ -236,6 +237,8 @@ export async function generateAndroid(
     recordWith?: (module: string, extraArgs: string[]) => Promise<void>;
   } = {},
 ): Promise<Manifest> {
+  const previewSize = config.android?.defaultPreviewSize;
+  if (previewSize !== undefined) validateAndroidPreviewSize(previewSize);
   const modules = config.android?.modules ?? [':app'];
   const variant = config.android?.variant ?? 'debug';
   const variantCap = variant[0].toUpperCase() + variant.slice(1);
@@ -244,7 +247,7 @@ export async function generateAndroid(
   const record =
     options.recordWith ??
     ((module: string, extraArgs: string[]) =>
-      runGradle(projectDir, [task(module)], quiet, { extraArgs }));
+      runPreviewGradle(projectDir, [task(module)], quiet, previewSize, extraArgs));
 
   // Modules deliberately not recorded this run: their previously recorded PNGs
   // are still harvested, but a missing output directory is not an error.
@@ -304,7 +307,7 @@ export async function generateAndroid(
     } else {
       // One invocation for all modules: without `--tests` there are no
       // task-scoped arguments to keep apart, so Gradle can schedule them together.
-      await runGradle(projectDir, modules.map(task), quiet);
+      await runPreviewGradle(projectDir, modules.map(task), quiet, previewSize);
     }
   }
 
@@ -379,6 +382,72 @@ export async function generateAndroid(
   };
   await writeFile(join(outputDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   return manifest;
+}
+
+/** Supply a temporary tester through Roborazzi's supported customization API. */
+async function runPreviewGradle(
+  projectDir: string,
+  tasks: string[],
+  quiet: boolean,
+  size?: { widthDp: number; heightDp: number },
+  extraArgs: string[] = [],
+): Promise<void> {
+  if (!size) return runGradle(projectDir, tasks, quiet, { extraArgs });
+  const tempDir = await mkdtemp(join(tmpdir(), 'phonebook-preview-size-'));
+  const script = join(tempDir, 'preview-size.gradle');
+  const sourceDir = join(tempDir, 'src');
+  const tester = join(sourceDir, 'io', 'github', 'stagbuild', 'phonebook', 'PhonebookPreviewTester.kt');
+  const qualifiers = previewSizeQualifiers(size);
+  try {
+    await mkdir(join(sourceDir, 'io', 'github', 'stagbuild', 'phonebook'), { recursive: true });
+    await writeFile(tester, `package io.github.stagbuild.phonebook
+
+import com.github.takahirom.roborazzi.*
+import com.github.takahirom.roborazzi.ComposePreviewTester.TestParameter.JUnit4TestParameter.AndroidPreviewJUnit4TestParameter
+
+@OptIn(ExperimentalRoborazziApi::class)
+class PhonebookPreviewTester :
+  ComposePreviewTester<AndroidPreviewJUnit4TestParameter> by AndroidComposePreviewTester(
+    capturer = { parameter ->
+      val info = parameter.preview.previewInfo
+      val options = if (info.device.isBlank() && info.widthDp <= 0 && info.heightDp <= 0) {
+        parameter.roborazziComposeOptions.builder().size(${size.widthDp}, ${size.heightDp}).build()
+      } else {
+        parameter.roborazziComposeOptions
+      }
+      AndroidComposePreviewTester.DefaultCapturer().capture(
+        parameter.copy(roborazziComposeOptions = options)
+      )
+    }
+  )
+`);
+    const groovySourceDir = sourceDir.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    await writeFile(script, `
+gradle.projectsEvaluated {
+  gradle.rootProject.allprojects { project ->
+    def android = project.extensions.findByName('android')
+    android?.sourceSets?.findByName('test')?.java?.srcDir('${groovySourceDir}')
+    project.tasks.configureEach { task ->
+      if (task.class.name.contains('GenerateComposePreviewRobolectricTestsTask')) {
+        if (task.testerQualifiedClassName.get() != 'com.github.takahirom.roborazzi.AndroidComposePreviewTester') {
+          throw new GradleException('Phonebook defaultPreviewSize requires the default Roborazzi preview tester')
+        }
+        task.robolectricConfig.put('qualifiers', '"${qualifiers}"')
+        task.testerQualifiedClassName.set('io.github.stagbuild.phonebook.PhonebookPreviewTester')
+      }
+    }
+  }
+}
+`);
+    await runGradle(projectDir, tasks, quiet, { extraArgs, initScript: script });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+export function previewSizeQualifiers(size: { widthDp: number; heightDp: number }): string {
+  const orientation = size.widthDp > size.heightDp ? 'land' : 'port';
+  return `w${size.widthDp}dp-h${size.heightDp}dp-${orientation}`;
 }
 
 interface RoborazziImageMeta {
@@ -540,11 +609,17 @@ export function runGradle(
      * that filter pass one task at a time.
      */
     extraArgs?: string[];
+    initScript?: string;
   } = {},
 ): Promise<void> {
   return new Promise((res, rej) => {
     const gradlew = resolve(projectDir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
-    const child = spawn(gradlew, [...tasks, ...(options.extraArgs ?? []), '--stacktrace'], {
+    const child = spawn(gradlew, [
+      ...(options.initScript ? ['--init-script', options.initScript] : []),
+      ...tasks,
+      ...(options.extraArgs ?? []),
+      '--stacktrace',
+    ], {
       cwd: projectDir,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -580,4 +655,3 @@ export function runGradle(
     });
   });
 }
-
