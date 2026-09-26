@@ -9,6 +9,7 @@ import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.j
 import { readPngSize } from '../png.js';
 import { parsePreviewName } from '../naming.js';
 import { gitInfo } from './git.js';
+import { PREVIEW_CLASSES_PROPERTY, writeScopedPreviewTester } from './scopedPreviewTester.js';
 
 export const EMPTY_PREVIEWS_MESSAGE =
   'No previews were recorded. Common causes: (1) packages = listOf(...) in generateComposePreviewRobolectricTests ' +
@@ -33,31 +34,21 @@ export function checkEmptyEntries(entryCount: number, allowEmpty: boolean): void
  * GenerateComposePreviewRobolectricTestsTask.generateTests, which hardcodes
  * `com.github.takahirom.roborazzi.RoborazziPreviewParameterizedTests` and, when
  * `generatedTestClassCount > 1`, suffixes it with the shard index (…Tests0,
- * …Tests1). There is no per-preview or per-file test class, so a file-scoped
- * filter has to select *parameters* of this one class.
+ * …Tests1). There is no per-preview or per-file test class, so scoping a
+ * render to one file's previews has to happen inside the test run.
  */
 const GENERATED_TEST_CLASS = 'RoborazziPreviewParameterizedTests';
 
 /**
- * A `--tests` pattern selecting every preview declared by one JVM class.
- *
- * The generated class has a single `@Test fun test()` run by
- * ParameterizedRobolectricTestRunner with `@Parameters(name = "{0}")`, so JUnit
- * reports each preview as the method `test[<parameter toString>]`. The
- * parameter's toString is
- * `JUnit4TestParameter(preview=<ComposablePreview>)`, and ComposablePreview's
- * toString (ProvideComposablePreview in ComposablePreviewScanner) is
- * `<declaringClass>_<methodName>[_<paramTypes>][_<previewIndex>]` — so the
- * declaring class, followed by an underscore, appears verbatim in the test name.
- *
- * Gradle matches `--tests` against `className + "." + methodName` as a full
- * regex with `*` → `.*` and everything else quoted (ClassTestSelectionMatcher),
- * so dots and brackets in the pattern are literal and a leading `*` disables the
- * class-scan pruning. That makes this pattern safe for both the sharded and
- * unsharded class names.
+ * A `--tests` pattern selecting the whole generated preview class (every
+ * shard) and nothing else, so a render never runs the module's ordinary unit
+ * tests. It cannot narrow further: each preview is a parameter of this class,
+ * named only once the run starts — after Gradle has picked what to run.
+ * Narrowing to one file's previews happens inside the run instead; see
+ * scopedPreviewTester.ts.
  */
-export function testsPatternForClass(declaringClass: string): string {
-  return `*${GENERATED_TEST_CLASS}*.test[*${declaringClass}_*]`;
+export function testsPatternForAllPreviews(): string {
+  return `*${GENERATED_TEST_CLASS}*`;
 }
 
 /**
@@ -86,20 +77,20 @@ export function moduleOfFile(file: string, modules: string[]): string | undefine
 }
 
 export interface PreviewFilterPlan {
-  /** Module -> `--tests` patterns. An empty array means "run this module unfiltered". */
+  /** Module -> declaring classes to render. An empty array means "render every preview in the module". */
   byModule: Map<string, string[]>;
   /** Human-readable reasons a file forced its module to run unfiltered. */
   warnings: string[];
 }
 
 /**
- * Maps changed source files onto Gradle `--tests` patterns, per module.
+ * Maps changed source files onto the JVM classes declaring their previews, per module.
  *
  * `sources` carries each file's text (undefined when it could not be read).
  * Only Kotlin files can declare a Compose `@Preview`, so everything else is
  * ignored. A file whose declaring class cannot be predicted with confidence —
  * unreadable, or carrying a `@file:JvmName` that renames the facade class —
- * makes its whole module run unfiltered rather than silently dropping previews
+ * makes its whole module render rather than silently dropping previews
  * from the manifest.
  */
 export function planPreviewFilter(
@@ -140,12 +131,12 @@ export function planPreviewFilter(
       kotlinFacadeClass(normalized),
       ...[...source.matchAll(/^(?:\w+ )*(?:class|object) (\w+)/gm)].map((m) => m[1]),
     ];
-    const patterns = byModule.get(module) ?? [];
+    const classes = byModule.get(module) ?? [];
     for (const name of declared) {
-      const pattern = testsPatternForClass(`${prefix}${name}`);
-      if (!patterns.includes(pattern)) patterns.push(pattern);
+      const declaringClass = `${prefix}${name}`;
+      if (!classes.includes(declaringClass)) classes.push(declaringClass);
     }
-    byModule.set(module, patterns);
+    byModule.set(module, classes);
   }
 
   return { byModule, warnings };
@@ -262,33 +253,32 @@ export async function generateAndroid(
     const plan = planPreviewFilter(sources, modules);
     for (const warning of plan.warnings) console.warn(`warning: ${warning}`);
 
+    const scopedModules = modules.filter((m) => (plan.byModule.get(m)?.length ?? 0) > 0);
+    const initScript = await writeScopedPreviewTester(projectDir, scopedModules);
+    const allPreviews = ['--tests', testsPatternForAllPreviews()];
+
     for (const module of modules) {
-      const patterns = plan.byModule.get(module);
-      if (patterns === undefined) {
+      const classes = plan.byModule.get(module);
+      if (classes === undefined) {
         skipped.add(module);
         continue;
       }
-      const extraArgs = patterns.flatMap((p) => ['--tests', p]);
+      const scopedArgs =
+        classes.length > 0
+          ? [`-P${PREVIEW_CLASSES_PROPERTY}=${classes.join(',')}`, '--init-script', initScript]
+          : [];
       await clearRoborazziOutput(projectDir, module);
-      await record(module, extraArgs);
-      if (extraArgs.length > 0 && !(await hasRecordedOutput(projectDir, module))) {
-        // Gradle's `--tests` can select this generated class (there is exactly
-        // one per module) and its bare `test` method, but not the individual
-        // parameterized previews inside it: ParameterizedRobolectricTestRunner
-        // resolves parameter names (and therefore the `test[...]` display
-        // names `testsPatternForClass` targets) at run time, after Gradle has
-        // already decided which tests to run. A pattern narrower than the
-        // class/method succeeds at zero cost by silently matching nothing —
-        // confirmed empirically against samples/android and kiwix-android: no
-        // variant of a parameter-scoped `--tests` pattern records anything,
-        // while the unfiltered class always does. Re-recording the whole
-        // module is the only reliable way to get this file's previews.
+      await record(module, [...allPreviews, ...scopedArgs]);
+      if (scopedArgs.length > 0 && !(await hasRecordedOutput(projectDir, module))) {
+        // The scoped tester found none of the requested classes' previews —
+        // the file declares none, or declares them somewhere the planner
+        // cannot see. Render the whole module rather than report nothing.
         console.warn(
-          `warning: scoped Gradle test filter for ${module} matched no parameterized previews; ` +
-            're-recording the whole module instead',
+          `warning: none of the requested previews were found in ${module}; ` +
+            're-recording every preview in the module instead',
         );
         await clearRoborazziOutput(projectDir, module);
-        await record(module, []);
+        await record(module, allPreviews);
       }
     }
     if (skipped.size === modules.length) {

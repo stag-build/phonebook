@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,8 +11,9 @@ import {
   planPreviewFilter,
   roborazziOutputDir,
   roborazziStagingDir,
-  testsPatternForClass,
+  testsPatternForAllPreviews,
 } from './android.js';
+import { PREVIEW_CLASSES_PROPERTY, SCOPED_TESTER_CLASS } from './scopedPreviewTester.js';
 
 describe('checkEmptyEntries', () => {
   it('throws with the diagnostic message when there are zero entries and allowEmpty is false', () => {
@@ -55,17 +56,17 @@ describe('moduleOfFile', () => {
 });
 
 describe('planPreviewFilter', () => {
-  it('turns a Kotlin file into a --tests pattern for its facade class', () => {
+  it('turns a Kotlin file into its facade class', () => {
     const plan = planPreviewFilter(
       [{ file: 'app/src/main/java/dev/stag/PrimaryButton.kt', source: kt('dev.stag') }],
       [':app'],
     );
     expect(plan.warnings).toEqual([]);
-    expect(plan.byModule.get(':app')).toEqual([testsPatternForClass('dev.stag.PrimaryButtonKt')]);
+    expect(plan.byModule.get(':app')).toEqual(['dev.stag.PrimaryButtonKt']);
   });
 
-  it('produces a pattern Gradle matches against the generated parameterized test name', () => {
-    const pattern = testsPatternForClass('dev.stag.PrimaryButtonKt');
+  it('selects the generated preview class, sharded or not, and no other test', () => {
+    const pattern = testsPatternForAllPreviews();
     // Gradle compiles `--tests` by quoting everything and turning * into .*,
     // then full-matching against "className.methodName".
     const regex = new RegExp(
@@ -78,10 +79,8 @@ describe('planPreviewFilter', () => {
       'com.github.takahirom.roborazzi.RoborazziPreviewParameterizedTests' +
       '.test[JUnit4TestParameter(preview=dev.stag.PrimaryButtonKt_PrimaryButtonEnabledPreview)]';
     expect(regex.test(name)).toBe(true);
-    // The sharded class name (generatedTestClassCount > 1) matches too.
     expect(regex.test(name.replace('Tests.test', 'Tests3.test'))).toBe(true);
-    // A preview from another file does not.
-    expect(regex.test(name.replace('PrimaryButtonKt_', 'UserCardKt_'))).toBe(false);
+    expect(regex.test('org.kiwix.ZimFileReaderTest.checkMimeTypeWithSemicolon')).toBe(false);
   });
 
   it('also covers previews declared inside a top-level class or object in the file', () => {
@@ -94,13 +93,10 @@ describe('planPreviewFilter', () => {
       ],
       [':app'],
     );
-    expect(plan.byModule.get(':app')).toEqual([
-      testsPatternForClass('dev.stag.CardsKt'),
-      testsPatternForClass('dev.stag.CardPreviews'),
-    ]);
+    expect(plan.byModule.get(':app')).toEqual(['dev.stag.CardsKt', 'dev.stag.CardPreviews']);
   });
 
-  it('groups patterns per module and leaves untouched modules out of the plan', () => {
+  it('groups classes per module and leaves untouched modules out of the plan', () => {
     const plan = planPreviewFilter(
       [
         { file: 'app/src/main/java/dev/stag/A.kt', source: kt('dev.stag') },
@@ -154,7 +150,7 @@ describe('planPreviewFilter', () => {
       [{ file: 'app/src/main/java/A.kt', source: '@Preview @Composable fun FooPreview() {}' }],
       [':app'],
     );
-    expect(plan.byModule.get(':app')).toEqual([testsPatternForClass('AKt')]);
+    expect(plan.byModule.get(':app')).toEqual(['AKt']);
   });
 });
 
@@ -235,10 +231,11 @@ describe('generateAndroid harvesting', () => {
       },
     });
 
-    // The filter is still narrowed to the requested file — this fix must not
+    // The render is still narrowed to the requested file — this fix must not
     // widen what Gradle runs, only what the harvest can see afterwards.
-    expect(sawTestsFilter).toContain('--tests');
-    expect(sawTestsFilter.join(' ')).toContain('PrimaryButtonKt');
+    expect(sawTestsFilter).toContain(
+      `-P${PREVIEW_CLASSES_PROPERTY}=dev.stag.phonebook.sample.PrimaryButtonKt`,
+    );
 
     expect(manifest.entries.map((e) => `${e.component}/${e.state}`)).toEqual(['Button/Enabled']);
     expect(manifest.entries.some((e) => e.previewName.includes('UserCard'))).toBe(false);
@@ -290,30 +287,54 @@ describe('generateAndroid harvesting', () => {
     expect(manifest.entries.map((e) => `${e.component}/${e.state}`)).toEqual(['User Card/Default']);
   });
 
-  it('retries unfiltered when a scoped --tests run records nothing', async () => {
+  it('scopes the render with the preview tester, and runs only the preview class', async () => {
     const projectDir = await sampleProject();
     const outputDir = join(projectDir, 'phonebook-out');
     const outDir = roborazziOutputDir(projectDir, ':app');
 
-    // Reproduces the real failure: Gradle's `--tests` can select the shared
-    // generated class, but not an individual parameterized preview inside it
-    // (its display name is resolved at run time, after Gradle has already
-    // picked which tests to run) — so the scoped invocation builds nothing,
-    // even though the file genuinely declares previews.
+    let seen: string[] = [];
+    await generateAndroid(config, projectDir, outputDir, {
+      quiet: true,
+      files: [PRIMARY_BUTTON],
+      recordWith: async (_module, extraArgs) => {
+        seen = extraArgs;
+        await writePng(outDir, FRESH, 2);
+      },
+    });
+
+    expect(seen.slice(0, 2)).toEqual(['--tests', testsPatternForAllPreviews()]);
+    const script = seen[seen.indexOf('--init-script') + 1];
+    const text = await readFile(script, 'utf8');
+    expect(text).toContain(SCOPED_TESTER_CLASS);
+    expect(text).toContain('[":app"]');
+    // The tester source the init script points at is on disk, under build/.
+    const tester = join(projectDir, 'build', 'phonebook', 'scoped-preview-tester',
+      'build', 'stag', 'phonebook', 'PhonebookPreviewTester.kt');
+    expect(await readFile(tester, 'utf8')).toContain(PREVIEW_CLASSES_PROPERTY);
+  });
+
+  it('renders the whole module when the scoped render records nothing', async () => {
+    const projectDir = await sampleProject();
+    const outputDir = join(projectDir, 'phonebook-out');
+    const outDir = roborazziOutputDir(projectDir, ':app');
+
+    // The tester found none of the requested previews (for example a preview
+    // declared somewhere the planner cannot see), so the scoped run is empty.
     const seenExtraArgs: string[][] = [];
     const manifest = await generateAndroid(config, projectDir, outputDir, {
       quiet: true,
       files: [PRIMARY_BUTTON],
       recordWith: async (_module, extraArgs) => {
         seenExtraArgs.push(extraArgs);
-        if (extraArgs.length > 0) return; // scoped call: records nothing
-        await writePng(outDir, FRESH, 2); // unfiltered retry: records for real
+        if (extraArgs.some((a) => a.startsWith(`-P${PREVIEW_CLASSES_PROPERTY}=`))) return;
+        await writePng(outDir, FRESH, 2);
       },
     });
 
     expect(seenExtraArgs).toHaveLength(2);
-    expect(seenExtraArgs[0]).toContain('--tests');
-    expect(seenExtraArgs[1]).toEqual([]);
+    // The retry stays on the preview class, so the module's ordinary unit
+    // tests do not run.
+    expect(seenExtraArgs[1]).toEqual(['--tests', testsPatternForAllPreviews()]);
     expect(manifest.entries.map((e) => `${e.component}/${e.state}`)).toEqual(['Button/Enabled']);
   });
 });
