@@ -275,6 +275,7 @@ async function runAndroidChecks(
 
   if (hasGenerateBlock) {
     allOk = (await runPreviewPackagesCheck(projectDir, modules, print)) && allOk;
+    await runPreviewScreenCheck(projectDir, modules, print);
   }
 
   if (hasGenerateBlock) {
@@ -452,6 +453,31 @@ async function runPreviewPackagesCheck(projectDir: string, modules: string[], pr
   }
 
   return allOk;
+}
+
+/**
+ * Setting `robolectricConfig` replaces Roborazzi's default map, including its
+ * Pixel 4a `qualifiers`. Without them Robolectric falls back to a 320x470dp
+ * screen, so a full-screen preview renders much shorter than in Android Studio.
+ * Informational only: the previews still record.
+ */
+async function runPreviewScreenCheck(projectDir: string, modules: string[], print: PrintFn): Promise<void> {
+  for (const module of modules) {
+    const moduleText = await gradleFileTexts(projectDir, [module]);
+    // Up to the end of the enclosing block: map values like "[33]" contain brackets.
+    const start = moduleText.search(/robolectricConfig\s*(?:=|\.set\()/);
+    if (start < 0) continue;
+    const end = moduleText.indexOf('}', start);
+    if (moduleText.slice(start, end < 0 ? undefined : end).includes('qualifiers')) continue;
+    print('preview-screen', {
+      ok: true,
+      note:
+        `${module} sets robolectricConfig without "qualifiers", which drops Roborazzi's phone-sized default; ` +
+        'full-screen previews will render on a 320x470dp screen. Add "qualifiers" to "RobolectricDeviceQualifiers.Pixel4a" ' +
+        '(or "\\"w411dp-h891dp-port\\"" to match Android Studio)',
+      detail: '',
+    });
+  }
 }
 
 /**

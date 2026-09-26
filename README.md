@@ -298,6 +298,8 @@ Phonebook groups screenshots into `component / state` cards from your existing p
 | `ios.simulator` | string | `"iPhone 17 Pro"` | Simulator device name used for `-destination`. |
 | `ios.onlyTesting` | string | auto-detected | `-only-testing:` filter so `generate` runs just the snapshot class, not the app's whole test suite. Auto-derived from the `SnapshotTest` subclass; set `""` to run everything. |
 
+Android previews render like Android Studio: a `@Preview` without its own size wraps its content, and full-screen (`fillMaxSize`) content fills the Robolectric screen, which Roborazzi defaults to a Pixel 4a. Setting `robolectricConfig` in the `generateComposePreviewRobolectricTests` block replaces that default, so include `"qualifiers" to "RobolectricDeviceQualifiers.Pixel4a"` (or `"\"w411dp-h891dp-port\""` for Android Studio's phone). Otherwise full-screen previews render on a 320×470dp screen. `phonebook doctor` points this out.
+
 Both `generate` and `build` accept `-C <dir>` (project directory containing `phonebook.config.json`). `generate` takes `-o <dir>` to override the bundle output and `--allow-empty` to tolerate a run that records no previews. `build` takes an optional bundle path — with none, it uses the project's bundle directory — and `-o <dir>` for the site output; without `-o`, `build` writes `index.html` straight into the bundle directory and reuses its `images/` in place (no copying), which is what the quickstarts above do. Pass `-o <dir>` to instead copy the bundle's images into a separate, standalone site directory.
 
 ## `phonebook init` and `phonebook doctor`
