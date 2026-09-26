@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import { validateAndroidPreviewSize, type PhonebookConfig } from '../config.js';
 import { changedFiles } from '../scan/scope.js';
@@ -384,7 +383,15 @@ export async function generateAndroid(
   return manifest;
 }
 
-/** Supply a temporary tester through Roborazzi's supported customization API. */
+/**
+ * Android Studio renders a preview without its own device or size on a phone
+ * screen. Roborazzi does too by default (Pixel 4a), but a project that sets
+ * `robolectricConfig` without `qualifiers` drops that default and falls back to
+ * Robolectric's 320x470dp screen, so full-screen previews come out stubby. An
+ * init script fills in phone-sized qualifiers in that case, or always applies
+ * `android.defaultPreviewSize` when configured. Previews with their own
+ * `device`/`widthDp`/`heightDp` still override these per preview.
+ */
 async function runPreviewGradle(
   projectDir: string,
   tasks: string[],
@@ -392,57 +399,31 @@ async function runPreviewGradle(
   size?: { widthDp: number; heightDp: number },
   extraArgs: string[] = [],
 ): Promise<void> {
-  if (!size) return runGradle(projectDir, tasks, quiet, { extraArgs });
-  const tempDir = await mkdtemp(join(tmpdir(), 'phonebook-preview-size-'));
-  const script = join(tempDir, 'preview-size.gradle');
-  const sourceDir = join(tempDir, 'src');
-  const tester = join(sourceDir, 'io', 'github', 'stagbuild', 'phonebook', 'PhonebookPreviewTester.kt');
-  const qualifiers = previewSizeQualifiers(size);
-  try {
-    await mkdir(join(sourceDir, 'io', 'github', 'stagbuild', 'phonebook'), { recursive: true });
-    await writeFile(tester, `package io.github.stagbuild.phonebook
+  // A stable path keeps Gradle's configuration cache valid across runs.
+  const script = join(projectDir, 'build', 'phonebook', 'preview-qualifiers.gradle');
+  await mkdir(join(projectDir, 'build', 'phonebook'), { recursive: true });
+  await writeFile(script, previewQualifiersInitScript(size));
+  await runGradle(projectDir, tasks, quiet, { extraArgs, initScript: script });
+}
 
-import com.github.takahirom.roborazzi.*
-import com.github.takahirom.roborazzi.ComposePreviewTester.TestParameter.JUnit4TestParameter.AndroidPreviewJUnit4TestParameter
+/** Android Studio's default preview phone. */
+export const STUDIO_DEFAULT_PREVIEW_SIZE = { widthDp: 411, heightDp: 891 };
 
-@OptIn(ExperimentalRoborazziApi::class)
-class PhonebookPreviewTester :
-  ComposePreviewTester<AndroidPreviewJUnit4TestParameter> by AndroidComposePreviewTester(
-    capturer = { parameter ->
-      val info = parameter.preview.previewInfo
-      val options = if (info.device.isBlank() && info.widthDp <= 0 && info.heightDp <= 0) {
-        parameter.roborazziComposeOptions.builder().size(${size.widthDp}, ${size.heightDp}).build()
-      } else {
-        parameter.roborazziComposeOptions
-      }
-      AndroidComposePreviewTester.DefaultCapturer().capture(
-        parameter.copy(roborazziComposeOptions = options)
-      )
-    }
-  )
-`);
-    const groovySourceDir = sourceDir.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    await writeFile(script, `
+export function previewQualifiersInitScript(size?: { widthDp: number; heightDp: number }): string {
+  const qualifiers = previewSizeQualifiers(size ?? STUDIO_DEFAULT_PREVIEW_SIZE);
+  // Without a configured size, a project's own qualifiers win.
+  const condition = size ? 'true' : "!task.robolectricConfig.get().containsKey('qualifiers')";
+  return `
 gradle.projectsEvaluated {
   gradle.rootProject.allprojects { project ->
-    def android = project.extensions.findByName('android')
-    android?.sourceSets?.findByName('test')?.java?.srcDir('${groovySourceDir}')
     project.tasks.configureEach { task ->
-      if (task.class.name.contains('GenerateComposePreviewRobolectricTestsTask')) {
-        if (task.testerQualifiedClassName.get() != 'com.github.takahirom.roborazzi.AndroidComposePreviewTester') {
-          throw new GradleException('Phonebook defaultPreviewSize requires the default Roborazzi preview tester')
-        }
+      if (task.class.name.contains('GenerateComposePreviewRobolectricTestsTask') && ${condition}) {
         task.robolectricConfig.put('qualifiers', '"${qualifiers}"')
-        task.testerQualifiedClassName.set('io.github.stagbuild.phonebook.PhonebookPreviewTester')
       }
     }
   }
 }
-`);
-    await runGradle(projectDir, tasks, quiet, { extraArgs, initScript: script });
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+`;
 }
 
 export function previewSizeQualifiers(size: { widthDp: number; heightDp: number }): string {

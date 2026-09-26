@@ -132,47 +132,14 @@ jobs:
             console.log('OK: unfiltered generate still renders all ' + got.length + ' previews.');
           "
 
-      - name: Render Android previews at the configured viewport
-        run: |
-          node --input-type=module -e '
-            import { readFile } from "node:fs/promises";
-            import { resolve } from "node:path";
-            import { loadConfig } from "./dist/config.js";
-            import { generateAndroid } from "./dist/engines/android.js";
-            const { config, projectDir } = await loadConfig("samples/android");
-            config.android.defaultPreviewSize = { widthDp: 393, heightDp: 852 };
-            const manifest = await generateAndroid(config, projectDir, "/tmp/android-sized");
-            if (manifest.entries.length !== 6 || manifest.entries.some(e => e.width !== 393 || e.height !== 852)) {
-              throw new Error(`Configured viewport was not captured: ${JSON.stringify(manifest.entries.map(e => [e.width, e.height]))}`);
-            }
-            const generated = await readFile(resolve(projectDir, "app/build/generated/roborazzi/preview-screenshot/debug/com/github/takahirom/roborazzi/RoborazziPreviewParameterizedTests.kt"), "utf8");
-            if (!generated.includes(`qualifiers = "w393dp-h852dp-port"`)) {
-              throw new Error("Generated Robolectric test does not use the configured qualifiers");
-            }
-          '
-
-      - name: Keep explicit Android preview sizes and devices
+      # Android Studio renders a size-less, full-screen preview on a phone. A
+      # project that overrides robolectricConfig without qualifiers loses
+      # Roborazzi's phone default, so Phonebook must supply 411x891dp itself.
+      - name: Full-screen previews render phone-sized when the project drops Roborazzi's qualifiers
         run: |
           cp src/engines/fixtures/PreviewSizeProbe.kt samples/android/app/src/main/java/dev/stag/phonebook/sample/PreviewSizeProbe.kt
-          node --input-type=module -e '
-            import { loadConfig } from "./dist/config.js";
-            import { generateAndroid } from "./dist/engines/android.js";
-            const { config, projectDir } = await loadConfig("samples/android");
-            config.android.defaultPreviewSize = { widthDp: 393, heightDp: 852 };
-            const manifest = await generateAndroid(config, projectDir, "/tmp/android-precedence");
-            const sizeOf = name => {
-              const entry = manifest.entries.find(e => e.previewName.includes(name));
-              if (!entry) throw new Error(`Missing ${name} preview`);
-              return [entry.width, entry.height];
-            };
-            for (const [name, expected] of [
-              ["DefaultViewportProbe", [393, 852]],
-              ["SizeViewportProbe", [240, 400]],
-              ["DeviceViewportProbe", [240, 400]],
-            ]) {
-              const actual = sizeOf(name);
-              if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-                throw new Error(`${name}: expected ${expected}, got ${actual}`);
-              }
-            }
-          '
+          sed -i 's/includePrivatePreviews = true/includePrivatePreviews = true\n        robolectricConfig = mapOf("sdk" to "[33]")/' samples/android/app/build.gradle.kts
+          node scripts/verify-android-preview-sizes.mjs /tmp/android-studio-default 411x891
+
+      - name: android.defaultPreviewSize overrides the full-screen size and keeps explicit sizes
+        run: node scripts/verify-android-preview-sizes.mjs /tmp/android-configured 393x852 393x852
