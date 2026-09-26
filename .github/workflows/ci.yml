@@ -131,15 +131,3 @@ jobs:
             }
             console.log('OK: unfiltered generate still renders all ' + got.length + ' previews.');
           "
-
-      # Android Studio renders a size-less, full-screen preview on a phone. A
-      # project that overrides robolectricConfig without qualifiers loses
-      # Roborazzi's phone default, so Phonebook must supply 411x891dp itself.
-      - name: Full-screen previews render phone-sized when the project drops Roborazzi's qualifiers
-        run: |
-          cp src/engines/fixtures/PreviewSizeProbe.kt samples/android/app/src/main/java/dev/stag/phonebook/sample/PreviewSizeProbe.kt
-          sed -i 's/includePrivatePreviews = true/includePrivatePreviews = true\n        robolectricConfig = mapOf("sdk" to "[33]")/' samples/android/app/build.gradle.kts
-          node scripts/verify-android-preview-sizes.mjs /tmp/android-studio-default 411x891
-
-      - name: android.defaultPreviewSize overrides the full-screen size and keeps explicit sizes
-        run: node scripts/verify-android-preview-sizes.mjs /tmp/android-configured 393x852 393x852

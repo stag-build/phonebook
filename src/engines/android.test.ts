@@ -9,34 +9,10 @@ import {
   kotlinFacadeClass,
   moduleOfFile,
   planPreviewFilter,
-  previewQualifiersInitScript,
-  previewSizeQualifiers,
   roborazziOutputDir,
   roborazziStagingDir,
   testsPatternForClass,
 } from './android.js';
-
-describe('previewSizeQualifiers', () => {
-  it('infers orientation from dimensions', () => {
-    expect(previewSizeQualifiers({ widthDp: 393, heightDp: 852 })).toBe('w393dp-h852dp-port');
-    expect(previewSizeQualifiers({ widthDp: 852, heightDp: 393 })).toBe('w852dp-h393dp-land');
-    expect(previewSizeQualifiers({ widthDp: 500, heightDp: 500 })).toBe('w500dp-h500dp-port');
-  });
-});
-
-describe('previewQualifiersInitScript', () => {
-  it("fills in Android Studio's phone only when the project sets no qualifiers", () => {
-    const script = previewQualifiersInitScript();
-    expect(script).toContain(`!task.robolectricConfig.get().containsKey('qualifiers')`);
-    expect(script).toContain(`put('qualifiers', '"w411dp-h891dp-port"')`);
-  });
-
-  it('always applies a configured size', () => {
-    const script = previewQualifiersInitScript({ widthDp: 852, heightDp: 393 });
-    expect(script).not.toContain('containsKey');
-    expect(script).toContain(`put('qualifiers', '"w852dp-h393dp-land"')`);
-  });
-});
 
 describe('checkEmptyEntries', () => {
   it('throws with the diagnostic message when there are zero entries and allowEmpty is false', () => {

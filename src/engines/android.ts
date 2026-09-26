@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
-import { validateAndroidPreviewSize, type PhonebookConfig } from '../config.js';
+import type { PhonebookConfig } from '../config.js';
 import { changedFiles } from '../scan/scope.js';
 import { diagnoseGradleFailure } from '../errors.js';
 import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.js';
@@ -236,8 +236,6 @@ export async function generateAndroid(
     recordWith?: (module: string, extraArgs: string[]) => Promise<void>;
   } = {},
 ): Promise<Manifest> {
-  const previewSize = config.android?.defaultPreviewSize;
-  if (previewSize !== undefined) validateAndroidPreviewSize(previewSize);
   const modules = config.android?.modules ?? [':app'];
   const variant = config.android?.variant ?? 'debug';
   const variantCap = variant[0].toUpperCase() + variant.slice(1);
@@ -246,7 +244,7 @@ export async function generateAndroid(
   const record =
     options.recordWith ??
     ((module: string, extraArgs: string[]) =>
-      runPreviewGradle(projectDir, [task(module)], quiet, previewSize, extraArgs));
+      runGradle(projectDir, [task(module)], quiet, { extraArgs }));
 
   // Modules deliberately not recorded this run: their previously recorded PNGs
   // are still harvested, but a missing output directory is not an error.
@@ -306,7 +304,7 @@ export async function generateAndroid(
     } else {
       // One invocation for all modules: without `--tests` there are no
       // task-scoped arguments to keep apart, so Gradle can schedule them together.
-      await runPreviewGradle(projectDir, modules.map(task), quiet, previewSize);
+      await runGradle(projectDir, modules.map(task), quiet);
     }
   }
 
@@ -381,54 +379,6 @@ export async function generateAndroid(
   };
   await writeFile(join(outputDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   return manifest;
-}
-
-/**
- * Android Studio renders a preview without its own device or size on a phone
- * screen. Roborazzi does too by default (Pixel 4a), but a project that sets
- * `robolectricConfig` without `qualifiers` drops that default and falls back to
- * Robolectric's 320x470dp screen, so full-screen previews come out stubby. An
- * init script fills in phone-sized qualifiers in that case, or always applies
- * `android.defaultPreviewSize` when configured. Previews with their own
- * `device`/`widthDp`/`heightDp` still override these per preview.
- */
-async function runPreviewGradle(
-  projectDir: string,
-  tasks: string[],
-  quiet: boolean,
-  size?: { widthDp: number; heightDp: number },
-  extraArgs: string[] = [],
-): Promise<void> {
-  // A stable path keeps Gradle's configuration cache valid across runs.
-  const script = join(projectDir, 'build', 'phonebook', 'preview-qualifiers.gradle');
-  await mkdir(join(projectDir, 'build', 'phonebook'), { recursive: true });
-  await writeFile(script, previewQualifiersInitScript(size));
-  await runGradle(projectDir, tasks, quiet, { extraArgs, initScript: script });
-}
-
-/** Android Studio's default preview phone. */
-export const STUDIO_DEFAULT_PREVIEW_SIZE = { widthDp: 411, heightDp: 891 };
-
-export function previewQualifiersInitScript(size?: { widthDp: number; heightDp: number }): string {
-  const qualifiers = previewSizeQualifiers(size ?? STUDIO_DEFAULT_PREVIEW_SIZE);
-  // Without a configured size, a project's own qualifiers win.
-  const condition = size ? 'true' : "!task.robolectricConfig.get().containsKey('qualifiers')";
-  return `
-gradle.projectsEvaluated {
-  gradle.rootProject.allprojects { project ->
-    project.tasks.configureEach { task ->
-      if (task.class.name.contains('GenerateComposePreviewRobolectricTestsTask') && ${condition}) {
-        task.robolectricConfig.put('qualifiers', '"${qualifiers}"')
-      }
-    }
-  }
-}
-`;
-}
-
-export function previewSizeQualifiers(size: { widthDp: number; heightDp: number }): string {
-  const orientation = size.widthDp > size.heightDp ? 'land' : 'port';
-  return `w${size.widthDp}dp-h${size.heightDp}dp-${orientation}`;
 }
 
 interface RoborazziImageMeta {
@@ -590,17 +540,11 @@ export function runGradle(
      * that filter pass one task at a time.
      */
     extraArgs?: string[];
-    initScript?: string;
   } = {},
 ): Promise<void> {
   return new Promise((res, rej) => {
     const gradlew = resolve(projectDir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
-    const child = spawn(gradlew, [
-      ...(options.initScript ? ['--init-script', options.initScript] : []),
-      ...tasks,
-      ...(options.extraArgs ?? []),
-      '--stacktrace',
-    ], {
+    const child = spawn(gradlew, [...tasks, ...(options.extraArgs ?? []), '--stacktrace'], {
       cwd: projectDir,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -636,3 +580,4 @@ export function runGradle(
     });
   });
 }
+

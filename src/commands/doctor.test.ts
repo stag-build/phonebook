@@ -403,6 +403,52 @@ roborazzi {
   });
 });
 
+describe('collectDoctorChecks: preview-screen', () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  async function screenLine(robolectricConfig: string): Promise<string | undefined> {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-doctor-'));
+    await writeAndroidAppModule(dir, {
+      buildGradleKts: `
+plugins {
+    id("io.github.takahirom.roborazzi") version "1.72.0"
+}
+
+dependencies {
+    testImplementation("io.github.sergio-sastre.ComposablePreviewScanner:android:0.9.3")
+}
+
+roborazzi {
+    generateComposePreviewRobolectricTests {
+        enable = true
+        packages = listOf("dev.stag.sample")
+        ${robolectricConfig}
+    }
+}
+`,
+      sources: { 'dev/stag/sample/MainActivity.kt': 'package dev.stag.sample\n' },
+    });
+    const { lines } = await collectDoctorChecks(dir);
+    return lines.find((l) => l.includes('preview-screen'));
+  }
+
+  it('notes a robolectricConfig that drops the default qualifiers', async () => {
+    const line = await screenLine('robolectricConfig = mapOf("application" to "App::class")');
+    expect(line).toContain('note preview-screen');
+    expect(line).toContain('RobolectricDeviceQualifiers.Pixel4a');
+  });
+
+  it('stays quiet when qualifiers are set or robolectricConfig is untouched', async () => {
+    expect(await screenLine(`robolectricConfig = mapOf("qualifiers" to "\\"w411dp-h891dp-port\\"")`)).toBeUndefined();
+    expect(await screenLine(`robolectricConfig = mapOf("sdk" to "[33]", "qualifiers" to "RobolectricDeviceQualifiers.Pixel4a")`)).toBeUndefined();
+    expect(await screenLine('')).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // snapshot-test-class check (iOS)
 // ---------------------------------------------------------------------------
