@@ -80,7 +80,8 @@ describe('planPreviewFilter', () => {
       '.test[JUnit4TestParameter(preview=dev.stag.PrimaryButtonKt_PrimaryButtonEnabledPreview)]';
     expect(regex.test(name)).toBe(true);
     expect(regex.test(name.replace('Tests.test', 'Tests3.test'))).toBe(true);
-    expect(regex.test('org.kiwix.ZimFileReaderTest.checkMimeTypeWithSemicolon')).toBe(false);
+    // An ordinary unit test in the same module is not selected.
+    expect(regex.test('dev.stag.phonebook.sample.UserRepositoryTest.loadsUser')).toBe(false);
   });
 
   it('also covers previews declared inside a top-level class or object in the file', () => {
