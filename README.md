@@ -231,6 +231,12 @@ npx @stag-build/phonebook build -C /path/to/your/android/repo
 
 Open `phonebook-out/index.html`.
 
+`generate --changed` (or `--files A.kt,B.kt`) renders only the previews declared in those files, with no extra
+setup. For that run only, Phonebook passes Gradle an init script that swaps in a preview tester which keeps the
+requested previews and scans only their packages. Both files are written under `build/phonebook/`, never into
+your sources. If your project configures its own `testerQualifiedClassName`, yours wins and the run renders
+every preview in the module.
+
 ## Quickstart: iOS
 
 Add the [SnapshotPreviews](https://github.com/getsentry/SnapshotPreviews) SPM package to your project and a small XCTest target that subclasses `SnapshotTest` (see `samples/ios` for a full working example):
