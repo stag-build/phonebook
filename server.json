@@ -8,13 +8,13 @@
     "url": "https://github.com/stag-build/phonebook",
     "source": "github"
   },
-  "version": "0.1.9",
+  "version": "0.1.10",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@stag-build/phonebook",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "transport": {
         "type": "stdio"
       },
