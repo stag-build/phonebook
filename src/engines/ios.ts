@@ -94,6 +94,20 @@ export function escapeRegex(literal: string): string {
 }
 
 /**
+ * The structs in `source` that conform to `PreviewProvider`, by the name
+ * SnapshotPreviews filters them on. Any name, not only the `X_Previews`
+ * convention: SnapshotPreviews renders every conformance, so the filter must
+ * be able to reach every one. Exported for tests.
+ */
+export function previewProviderTypes(source: string): string[] {
+  const types: string[] = [];
+  const regex = /\bstruct\s+(\w+)\s*:[^{]*\bPreviewProvider\b/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(source)) !== null) types.push(match[1]);
+  return types;
+}
+
+/**
  * The SNAPSHOTS_ONLY_FILTER value that renders only the previews declared in
  * `files`.
  *
@@ -125,10 +139,24 @@ export function escapeRegex(literal: string): string {
  * of the ":DisplayName" suffix, either one closes the match. Unanchored
  * entirely, "Card.swift" would also claim "UserCard.swift"; anchoring at
  * ".swift$" alone reintroduced a different, worse miss.
+ *
+ * A legacy `PreviewProvider` never reaches that fileID check. SnapshotPreviews
+ * filters it first by its runtime type name, "<Module>.<Type>"
+ * (SnapshotPreviewsCore.swift's findPreviews: `guard proto == "PreviewProvider"
+ * else { return true }`, then `shouldInclude(name:)` on the conformance name),
+ * and drops it there if nothing matches. A file-only filter therefore renders
+ * none of a file's PreviewProviders — an empty export for a file that plainly
+ * declares previews. So each file also contributes one pattern per
+ * PreviewProvider type it declares, `previewProvidersOf` reading them from the
+ * source. The optional `(?:.*\.)?` admits the anonymous context Swift puts in a
+ * private type's runtime name; `$` keeps "Card_Previews" from claiming
+ * "Card_PreviewsExtra". Neither kind of pattern can match the other kind's
+ * string: a fileID starts "<Module>/", a type name "<Module>.".
  */
 export async function buildSnapshotsOnlyFilter(
   files: string[],
   moduleOf: (file: string) => Promise<string | undefined>,
+  previewProvidersOf: (file: string) => Promise<string[]> = async () => [],
 ): Promise<string> {
   const swift = files.filter((file) => file.endsWith('.swift'));
   if (swift.length === 0) {
@@ -151,6 +179,9 @@ export async function buildSnapshotsOnlyFilter(
       continue;
     }
     patterns.push(`^${escapeRegex(module)}/${escapeRegex(basename(file))}(?::|$)`);
+    for (const type of await previewProvidersOf(file)) {
+      patterns.push(`^${escapeRegex(module)}\\.(?:.*\\.)?${escapeRegex(type)}$`);
+    }
   }
 
   if (unresolved.length > 0) {
@@ -287,8 +318,18 @@ async function resolveSnapshotsOnlyFilter(
   const files = options.files ?? (await changedFiles(projectDir));
   const pbxproj = await readPbxprojText(projectDir, ios.project ? join(projectDir, ios.project) : undefined);
   const cache = new Map<string, string | undefined>();
-  return buildSnapshotsOnlyFilter(files, (file) =>
-    moduleForFile(pbxproj, projectDir, file, { project: ios.project, workspace: ios.workspace, scheme: ios.scheme }, cache),
+  return buildSnapshotsOnlyFilter(
+    files,
+    (file) =>
+      moduleForFile(pbxproj, projectDir, file, { project: ios.project, workspace: ios.workspace, scheme: ios.scheme }, cache),
+    async (file) => {
+      try {
+        return previewProviderTypes(await readFile(join(projectDir, file), 'utf8'));
+      } catch {
+        // A --changed file that was deleted has no previews left to render.
+        return [];
+      }
+    },
   );
 }
 
