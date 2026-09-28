@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  previewProviderTypes,
   buildEmptySnapshotsMessage,
   buildSnapshotsOnlyFilter,
   escapeRegex,
@@ -233,6 +234,29 @@ describe('buildSnapshotsOnlyFilter', () => {
     expect(regex.test('App/CardHeader.swift:CardHeader/Default')).toBe(false);
   });
 
+  // A legacy `struct X_Previews: PreviewProvider` has no fileID for the
+  // pattern above to match. SnapshotPreviews checks it against its runtime
+  // type name, "<Module>.<Type>", before it ever looks at a fileID — so a
+  // file-only filter drops every PreviewProvider in the file, and the run
+  // exports nothing. Seen on kiwix-apple: DownloadTaskCell and Favicon both
+  // rendered zero snapshots through `--files`.
+  it('also matches the PreviewProvider types declared in each file, by runtime type name', async () => {
+    const filter = await buildSnapshotsOnlyFilter(
+      ['App/Views/DownloadTaskCell.swift'],
+      async () => 'App',
+      async () => ['DownloadTaskCell_Previews'],
+    );
+    expect(filter).toBe('^App/DownloadTaskCell\\.swift(?::|$)\n^App\\.(?:.*\\.)?DownloadTaskCell_Previews$');
+    const regex = filter.split('\n').map((pattern) => new RegExp(pattern));
+    const matches = (name: string) => regex.some((r) => r.test(name));
+    expect(matches('App.DownloadTaskCell_Previews')).toBe(true);
+    // A private struct's runtime name carries an anonymous context in between.
+    expect(matches('App.(unknown context at $1004f8a2c).DownloadTaskCell_Previews')).toBe(true);
+    // Still anchored: another type, or the same name in another module, is out.
+    expect(matches('App.DownloadTaskCell_PreviewsExtra')).toBe(false);
+    expect(matches('Other.DownloadTaskCell_Previews')).toBe(false);
+  });
+
   // This used to drop the filter and render the whole project. A caller that
   // asked for one file and silently got a thousand previews — and every
   // simulator boot that costs — was given a different answer than the one it
@@ -254,5 +278,23 @@ describe('buildSnapshotsOnlyFilter', () => {
     expect(await buildSnapshotsOnlyFilter(['README.md'], async () => 'App')).toBe('^$');
     expect(warn.mock.calls[0][0]).toContain('Swift');
     warn.mockRestore();
+  });
+});
+
+describe('previewProviderTypes', () => {
+  it('names every struct that conforms to PreviewProvider, whatever it is called', () => {
+    const source = [
+      'struct DownloadTaskCell: View { var body: some View { EmptyView() } }',
+      'struct DownloadTaskCell_Previews: PreviewProvider {',
+      '  static var previews: some View { DownloadTaskCell() }',
+      '}',
+      'private struct Other : View, PreviewProvider { }',
+      '#Preview("Named") { DownloadTaskCell() }',
+    ].join('\n');
+    expect(previewProviderTypes(source)).toEqual(['DownloadTaskCell_Previews', 'Other']);
+  });
+
+  it('finds none in a file with only #Preview macros', () => {
+    expect(previewProviderTypes('#Preview { Text("hi") }')).toEqual([]);
   });
 });
