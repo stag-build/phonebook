@@ -129,7 +129,7 @@ async function detectPlatform(
   return { platform: undefined };
 }
 
-export async function runInit(dir: string, options: { writeSnapshotClass?: boolean } = {}): Promise<void> {
+export async function runInit(dir: string, options: { writeSnapshotClass?: boolean; simulator?: string } = {}): Promise<void> {
   const projectDir = resolve(dir);
   const configPath = resolve(projectDir, 'phonebook.config.json');
   const alreadyExists = await exists(configPath);
@@ -141,9 +141,21 @@ export async function runInit(dir: string, options: { writeSnapshotClass?: boole
         '.xcworkspace found.',
     );
   }
+  if (options.simulator !== undefined) {
+    if (!options.simulator.trim()) throw new Error('--simulator requires a simulator name.');
+    if (detected.platform !== 'ios') throw new Error('--simulator only applies to iOS projects.');
+  }
 
   if (alreadyExists) {
-    console.log(`${configPath} already exists; leaving it untouched.`);
+    if (options.simulator !== undefined) {
+      const { config } = await loadConfig(projectDir);
+      if (config.platform !== 'ios') throw new Error('--simulator requires an iOS Phonebook configuration.');
+      config.ios = { ...config.ios, simulator: options.simulator };
+      await writeFile(configPath, JSON.stringify(config, null, 2) + '\n');
+      console.log(`Updated simulator in ${configPath}`);
+    } else {
+      console.log(`${configPath} already exists; leaving it untouched.`);
+    }
   } else {
     const appName = basename(projectDir);
     let config: PhonebookConfig;
@@ -164,7 +176,7 @@ export async function runInit(dir: string, options: { writeSnapshotClass?: boole
         ios: {
           ...(detected.workspace ? { workspace: detected.workspace } : { project: detected.project }),
           scheme: projectName,
-          simulator: 'iPhone 17 Pro',
+          simulator: options.simulator ?? 'iPhone 17 Pro',
         },
       };
     }

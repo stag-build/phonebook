@@ -2,8 +2,61 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { detectAndroidPackage, tryWriteSnapshotClass, IOS_SNAPSHOT_TEST_CLASS_SNIPPET } from './init.js';
+import { detectAndroidPackage, runInit, tryWriteSnapshotClass, IOS_SNAPSHOT_TEST_CLASS_SNIPPET } from './init.js';
 import { findSnapshotTestSubclass } from '../ios/snapshotTestClass.js';
+
+describe('runInit simulator selection', () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('records the selected simulator in a new iOS configuration', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-init-simulator-'));
+    await mkdir(join(dir, 'App.xcodeproj'));
+
+    await runInit(dir, { simulator: 'iPhone 18 Pro' });
+
+    const config = JSON.parse(await readFile(join(dir, 'phonebook.config.json'), 'utf8'));
+    expect(config.ios.simulator).toBe('iPhone 18 Pro');
+  });
+
+  it('updates only the simulator when init is retried with an existing configuration', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-init-simulator-'));
+    await mkdir(join(dir, 'App.xcodeproj'));
+    const original = {
+      appName: 'Designer App', platform: 'ios', output: 'custom-output',
+      ios: { project: 'App.xcodeproj', scheme: 'CustomScheme', simulator: 'iPhone 17 Pro', onlyTesting: 'AppTests/Snapshots' },
+      customSetting: { keep: true },
+    };
+    await writeFile(join(dir, 'phonebook.config.json'), JSON.stringify(original));
+
+    await runInit(dir, { simulator: 'iPhone 18 Pro' });
+
+    const config = JSON.parse(await readFile(join(dir, 'phonebook.config.json'), 'utf8'));
+    expect(config).toEqual({ ...original, ios: { ...original.ios, simulator: 'iPhone 18 Pro' } });
+  });
+
+  it('rejects a simulator option for Android without writing a configuration', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-init-simulator-'));
+    await writeFile(join(dir, 'settings.gradle.kts'), '');
+
+    await expect(runInit(dir, { simulator: 'iPhone 18 Pro' })).rejects.toThrow(/iOS/);
+    await expect(readFile(join(dir, 'phonebook.config.json'))).rejects.toThrow();
+  });
+
+  it('rejects an empty simulator name without replacing an existing configuration', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'phonebook-init-simulator-'));
+    await mkdir(join(dir, 'App.xcodeproj'));
+    const configPath = join(dir, 'phonebook.config.json');
+    const original = '{"appName":"App","platform":"ios","ios":{"project":"App.xcodeproj","simulator":"iPhone 18 Pro"}}';
+    await writeFile(configPath, original);
+
+    await expect(runInit(dir, { simulator: '   ' })).rejects.toThrow(/simulator name/);
+    expect(await readFile(configPath, 'utf8')).toBe(original);
+  });
+});
 
 describe('detectAndroidPackage', () => {
   let dir: string;

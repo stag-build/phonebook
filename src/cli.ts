@@ -93,6 +93,7 @@ program
   .command('init')
   .description('Detect the platform and scaffold phonebook.config.json')
   .option('-C, --dir <dir>', 'project directory to initialize', '.')
+  .option('--simulator <name>', 'iOS simulator to record in phonebook.config.json')
   .option(
     '--write-snapshot-class',
     'iOS only: write the missing SnapshotTest subclass, but only when the linking target uses Xcode ' +
@@ -100,8 +101,8 @@ program
       'otherwise hands-off behavior',
     false,
   )
-  .action(async (opts: { dir: string; writeSnapshotClass: boolean }) => {
-    await runInit(opts.dir, { writeSnapshotClass: opts.writeSnapshotClass });
+  .action(async (opts: { dir: string; writeSnapshotClass: boolean; simulator?: string }) => {
+    await runInit(opts.dir, { writeSnapshotClass: opts.writeSnapshotClass, simulator: opts.simulator });
   });
 
 program
