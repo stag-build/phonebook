@@ -143,6 +143,43 @@ describe('fileReferencePaths', () => {
   });
 });
 
+/**
+ * Xcode sorts the PBXGroup section by object id, so a child group can be
+ * written before its parent. Ids here descend with depth.
+ */
+function descendingIdProject(withMainGroup: boolean): string {
+  const project = withMainGroup
+    ? `\n\t\tAAAAAAAAAAAAAAAAAAAAAAA1 /* Project object */ = {\n\t\t\tisa = PBXProject;\n\t\t\tmainGroup = 999999999999999999999999;\n\t\t};`
+    : '';
+  return pbxproj(
+    group('111111111111111111111111', 'Feature', [CARD_REF]) +
+      group('222222222222222222222222', 'Core', ['111111111111111111111111']) +
+      group('333333333333333333333333', 'My App', ['222222222222222222222222']) +
+      group('999999999999999999999999', undefined, ['333333333333333333333333']) +
+      fileRef(CARD_REF, 'X.swift') +
+      buildFile(CARD_BUILD, CARD_REF, 'X.swift') +
+      sourcesPhase(PHASE, [CARD_BUILD]) +
+      classicTarget(CLASSIC_APP, 'App', [PHASE]) +
+      project,
+  );
+}
+
+describe('classic groups whose ids sort before their parents', () => {
+  it('resolves a nested file through the mainGroup, spaces included', () => {
+    const project = descendingIdProject(true);
+    expect(targetForFile(project, 'My App/Core/Feature/X.swift')).toBe('App');
+    expect(targetForFile(project, 'Core/Feature/X.swift')).toBeUndefined();
+  });
+
+  it('resolves it without a PBXProject too, by walking detached roots', () => {
+    expect(targetForFile(descendingIdProject(false), 'My App/Core/Feature/X.swift')).toBe('App');
+  });
+
+  it('leaves a file in no target unresolved', () => {
+    expect(targetForFile(descendingIdProject(true), 'My App/Core/Feature/Y.swift')).toBeUndefined();
+  });
+});
+
 describe('sourcesBuildPhaseOwner', () => {
   it('finds the target whose sources phase compiles the file', () => {
     expect(sourcesBuildPhaseOwner(classicProject(), 'Sources/Views/UserCard.swift')).toBe('App');

@@ -298,3 +298,11 @@ describe('previewProviderTypes', () => {
     expect(previewProviderTypes('#Preview { Text("hi") }')).toEqual([]);
   });
 });
+
+describe('buildSnapshotsOnlyFilter unresolved reasons', () => {
+  it('names the build-settings failure separately from a missing target', async () => {
+    const why = (f: string) => (f === 'A.swift' ? ('build-settings' as const) : ('no-target' as const));
+    const run = buildSnapshotsOnlyFilter(['A.swift', 'B.swift'], async () => undefined, async () => [], why);
+    await expect(run).rejects.toThrow(/Could not work out which target compiles B\.swift[\s\S]*Found the target that compiles A\.swift/);
+  });
+});
