@@ -9,7 +9,7 @@ import { SCHEMA_VERSION, type Manifest, type ManifestEntry } from '../manifest.j
 import { readPngSize } from '../png.js';
 import { parsePreviewName, spaceCamelCase } from '../naming.js';
 import { gitInfo } from './git.js';
-import { findSnapshotTestSubclass, findSnapshottingTestsTargets, moduleForFile, readPbxprojText } from '../ios/snapshotTestClass.js';
+import { findSnapshotTestSubclass, findSnapshottingTestsTargets, localSwiftPackageModule, moduleForFile, targetForFile, readPbxprojText } from '../ios/snapshotTestClass.js';
 import { parseFailedPreviews } from '../ios/unrendered.js';
 import { changedFiles } from '../scan/scope.js';
 
@@ -157,6 +157,8 @@ export async function buildSnapshotsOnlyFilter(
   files: string[],
   moduleOf: (file: string) => Promise<string | undefined>,
   previewProvidersOf: (file: string) => Promise<string[]> = async () => [],
+  /** Why a file has no module: its target is known but the build-settings query failed, or no target lists it. */
+  whyUnresolved: (file: string) => 'build-settings' | 'no-target' = () => 'no-target',
 ): Promise<string> {
   const swift = files.filter((file) => file.endsWith('.swift'));
   if (swift.length === 0) {
@@ -185,12 +187,25 @@ export async function buildSnapshotsOnlyFilter(
   }
 
   if (unresolved.length > 0) {
-    throw new Error(
-      `Could not work out which target compiles ${unresolved.join(', ')}, so the previews for those ` +
-        'files cannot be singled out. No filesystem-synchronized folder covers them and no target\'s ' +
-        'build phase lists them — check they are part of the Xcode project, and that ' +
-        '`xcodebuild -showBuildSettings` works for their target. Drop --files to render the whole project.',
-    );
+    const buildSettingsFailed = unresolved.filter((f) => whyUnresolved(f) === 'build-settings');
+    const noTarget = unresolved.filter((f) => whyUnresolved(f) !== 'build-settings');
+    const messages: string[] = [];
+    if (noTarget.length > 0) {
+      messages.push(
+        `Could not work out which target compiles ${noTarget.join(', ')}, so the previews for those ` +
+          'files cannot be singled out. No filesystem-synchronized folder covers them and no target\'s ' +
+          'build phase lists them — check they are part of the Xcode project. ' +
+          'Drop --files to render the whole project.',
+      );
+    }
+    if (buildSettingsFailed.length > 0) {
+      messages.push(
+        `Found the target that compiles ${buildSettingsFailed.join(', ')}, but \`xcodebuild -showBuildSettings\` ` +
+          'failed or returned no module name for it, so the previews for those files cannot be singled out — ' +
+          'check that command works for that target. Drop --files to render the whole project.',
+      );
+    }
+    throw new Error(messages.join('\n'));
   }
   return patterns.join('\n');
 }
@@ -330,6 +345,10 @@ async function resolveSnapshotsOnlyFilter(
         return [];
       }
     },
+    (file) =>
+      localSwiftPackageModule(pbxproj, file) === undefined && targetForFile(pbxproj, file) !== undefined
+        ? 'build-settings'
+        : 'no-target',
   );
 }
 

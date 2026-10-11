@@ -416,6 +416,9 @@ export function localSwiftPackageModule(pbxproj: string, filePath: string): stri
  * shows in the navigator and that contributes nothing to the path on disk,
  * which is exactly what makes walking up from a file ambiguous.
  *
+ * The walk starts at the project's mainGroup, then at groups nothing else
+ * contains, because the order groups appear in the file is by object id.
+ *
  * A group whose sourceTree is SOURCE_ROOT restarts the path at the project
  * directory, because that is what the field means; one that is "<absolute>"
  * describes a file outside the project entirely and is skipped, since nothing
@@ -461,9 +464,21 @@ export function fileReferencePaths(pbxproj: string): Map<string, string> {
     paths.set(id, tree === 'SOURCE_ROOT' ? own : join(prefix, own));
   };
 
-  for (const id of groups.keys()) {
-    if (!visited.has(id)) walk(id, '');
+  // Xcode writes the PBXGroup section sorted by object id, not by hierarchy, so
+  // text order can put a child before its parent. Walking in that order would
+  // reach the child with an empty prefix and, via `visited`, never revisit it.
+  // The project's mainGroup is the real root; after it, only groups no other
+  // group contains (detached roots), then anything left over from a cycle.
+  for (const [, body] of extractPbxprojEntries(pbxproj, 'PBXProject')) {
+    const main = pbxprojField(body, 'mainGroup');
+    if (main) walk(main, '');
   }
+  const contained = new Set<string>();
+  for (const body of groups.values()) for (const child of childIds(body)) contained.add(child);
+  for (const id of groups.keys()) {
+    if (!contained.has(id)) walk(id, '');
+  }
+  for (const id of groups.keys()) walk(id, '');
   return paths;
 }
 
