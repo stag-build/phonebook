@@ -305,4 +305,12 @@ describe('buildSnapshotsOnlyFilter unresolved reasons', () => {
     const run = buildSnapshotsOnlyFilter(['A.swift', 'B.swift'], async () => undefined, async () => [], why);
     await expect(run).rejects.toThrow(/Could not work out which target compiles B\.swift[\s\S]*Found the target that compiles A\.swift/);
   });
+
+  it('preserves a module lookup failure and never recommends broadening the request', async () => {
+    const failure = new Error('xcodebuild rejected the owning target query (exit 64)');
+    await expect(buildSnapshotsOnlyFilter(['Card.swift'], async () => { throw failure; })).rejects.toBe(failure);
+    const error = await buildSnapshotsOnlyFilter(['Card.swift'], async () => undefined).catch((error) => error);
+    expect(error.message).not.toContain('Drop --files');
+    expect(error.message).toContain('no previews were rendered');
+  });
 });
