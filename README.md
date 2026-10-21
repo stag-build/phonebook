@@ -7,6 +7,8 @@
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
 [![Glama MCP server score](https://glama.ai/mcp/servers/stag-build/phonebook/badges/score.svg)](https://glama.ai/mcp/servers/stag-build/phonebook)
 
+[![Phonebook MCP server](https://mcprush.com/badge/phonebook-mcp/card.svg)](https://mcprush.com/to/phonebook-mcp?ref=badge)
+
 </div>
 
 Phonebook turns screenshots your team already has into a Storybook-style component gallery. No new test code, no design tokens to maintain by hand — it renders what's already in your codebase into a static site designers can open without installing anything. Each repo runs Phonebook independently; v1 is single-platform, so one Android repo (or one iOS repo) produces one bundle and one site.
