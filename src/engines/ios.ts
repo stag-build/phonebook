@@ -195,14 +195,14 @@ export async function buildSnapshotsOnlyFilter(
         `Could not work out which target compiles ${noTarget.join(', ')}, so the previews for those ` +
           'files cannot be singled out. No filesystem-synchronized folder covers them and no target\'s ' +
           'build phase lists them — check they are part of the Xcode project. ' +
-          'Drop --files to render the whole project.',
+          'The requested file scope has been preserved; no previews were rendered.',
       );
     }
     if (buildSettingsFailed.length > 0) {
       messages.push(
         `Found the target that compiles ${buildSettingsFailed.join(', ')}, but \`xcodebuild -showBuildSettings\` ` +
           'failed or returned no module name for it, so the previews for those files cannot be singled out — ' +
-          'check that command works for that target. Drop --files to render the whole project.',
+          'check that command works for that target. The requested file scope has been preserved; no previews were rendered.',
       );
     }
     throw new Error(messages.join('\n'));

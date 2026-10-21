@@ -48,6 +48,31 @@ What to judge:
 - `#Preview("Name/State")` vs unnamed previews: unnamed ones should group by their View's name with state "Default".
 - UIKit-hosted or environment-dependent previews may fail — check the failure is visible, note which patterns break.
 
+### Single-file workspace regression
+
+Use a workspace with an app and a separate framework target, including a framework
+whose `PRODUCT_MODULE_NAME` differs from its target name. The framework need not be
+an explicit build entry of the app scheme. Run `generate --files <one Swift file>`
+for one app component and one framework component, using a separate output directory
+for each. Repeat with a project-based configuration and with a legacy
+`PreviewProvider` component.
+
+Each manifest must contain readable images from only the requested source file.
+The module lookup must query the file's referenced owning `.xcodeproj` and exact
+target, using the iOS Simulator SDK and the scheme's Test-action configuration.
+Include a configuration-conditional module name whose Debug and Release values
+differ; the selected module must match the Test action. A workspace scheme settings
+query alone is insufficient: it can omit framework dependencies. Never combine `-workspace` and
+`-target`, select the first module in a multi-target response, or rerun without
+`--files` to get around a failure.
+
+For command rejection, verify the diagnostics retain the exact arguments,
+directory, exit status, stdout, and stderr. A successful settings command with no
+matching target, duplicate matching targets, malformed JSON, or no module name must
+fail explicitly before the snapshot test starts.
+Workspace metadata pointing outside the selected project root, including through
+a symlink, must stop before reading that external project's build configuration.
+
 ## 3. MCP server with Claude Code
 
 From the target app's repo:

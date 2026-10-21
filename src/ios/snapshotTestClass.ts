@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { readdir, readFile, realpath } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -538,13 +538,14 @@ export function sourcesBuildPhaseOwner(pbxproj: string, filePath: string): strin
 
 /**
  * The Swift module name a source file compiles into, or undefined when the
- * project structure cannot say (no synchronized folder covers it, or xcodebuild
- * cannot report the target's settings).
+ * project structure cannot say which target compiles it. Build-settings failures
+ * are errors, carrying the actual command output rather than an absent module.
  *
  * The module name is the first half of a #Preview's synthesized fileID
  * ("<Module>/<File>.swift"), which is what SnapshotPreviews matches its filter
- * patterns against. `cache` is keyed by target name so a run that filters a
- * dozen files still shells out to xcodebuild once per target.
+ * patterns against. `cache` retains one Test-action configuration query, one
+ * module query per project/target/configuration, and one read of each workspace
+ * project file for the requested files.
  */
 export async function moduleForFile(
   pbxproj: string,
@@ -553,42 +554,234 @@ export async function moduleForFile(
   xcodebuildTarget: { project?: string; workspace?: string; scheme?: string },
   cache?: Map<string, string | undefined>,
 ): Promise<string | undefined> {
+  const withinConfiguredProject = xcodebuildTarget.project && !xcodebuildTarget.workspace
+    ? relative(dirname(resolve(projectDir, xcodebuildTarget.project)), resolve(projectDir, filePath))
+    : filePath;
   // Checked first, and returned directly with no xcodebuild round trip: a
   // local package's module name is read off its own directory layout, not
   // asked of a target xcodebuild does not build itself. Trying the Xcode-target
   // path first would mean treating "SnapshottingTests" as if it were a target
   // in the .xcodeproj, which it is not, and getting a wrong or missing answer
   // from a query that was never going to apply.
-  const packageModule = localSwiftPackageModule(pbxproj, filePath);
+  const packageModule = localSwiftPackageModule(pbxproj, withinConfiguredProject);
   if (packageModule) return packageModule;
 
-  const targetName = targetForFile(pbxproj, filePath);
-  if (!targetName) return undefined;
-  if (cache?.has(targetName)) return cache.get(targetName);
+  // Workspace scheme settings contain only that scheme's build entries. A
+  // framework linked by the app can be absent, as SignalUI is from Signal's
+  // settings. Resolve the file's project first, then query that exact target.
+  const owner = xcodebuildTarget.workspace
+    ? await workspaceOwner(projectDir, filePath, xcodebuildTarget.workspace, cache)
+    : {
+        project: xcodebuildTarget.project,
+        target: targetForFile(pbxproj, withinConfiguredProject),
+      };
+  if (!owner?.target) return undefined;
+  const configurationKey = JSON.stringify(['test-configuration', xcodebuildTarget]);
+  let configuration = cache?.get(configurationKey);
+  if (xcodebuildTarget.scheme && !configuration) {
+    configuration = await testConfiguration(projectDir, xcodebuildTarget);
+    cache?.set(configurationKey, configuration);
+  }
+  const cacheKey = JSON.stringify([owner.project, owner.target, configuration]);
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
 
-  const module = await productModuleName(projectDir, targetName, xcodebuildTarget);
-  cache?.set(targetName, module);
+  const module = await productModuleName(projectDir, owner.target, owner.project, configuration);
+  cache?.set(cacheKey, module);
   return module;
+}
+
+function xmlAttribute(value: string): string {
+  return value.replace(/&(?:#x([\da-f]+)|#(\d+)|amp|quot|apos|lt|gt);/gi, (entity, hex, decimal) => {
+    if (hex || decimal) return String.fromCodePoint(parseInt(hex ?? decimal, hex ? 16 : 10));
+    return ({ '&amp;': '&', '&quot;': '"', '&apos;': "'", '&lt;': '<', '&gt;': '>' } as Record<string, string>)[entity] ?? entity;
+  });
+}
+
+/** Project references retain their workspace group path; no directory-name guesses. */
+export function workspaceProjects(contents: string, workspaceDir: string): string[] {
+  const projects = new Set<string>();
+  const groups = [workspaceDir];
+  const tags = contents.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<(\/)?(Group|FileRef)\b([^>]*?)(\/?)>/g);
+  for (const [, closing, kind, attributes, selfClosing] of tags) {
+    if (closing) {
+      if (kind === 'Group') groups.pop();
+      continue;
+    }
+    const attribute = attributes.match(/\blocation\s*=\s*(?:"([^"]*)"|'([^']*)')/);
+    const location = attribute ? xmlAttribute(attribute[1] ?? attribute[2]) : 'group:';
+    const separator = location.indexOf(':');
+    const base = location.slice(0, separator);
+    const path = location.slice(separator + 1);
+    let absolute: string;
+    if (base === 'group') absolute = resolve(groups.at(-1)!, path);
+    else if (base === 'container') absolute = resolve(workspaceDir, path);
+    else if (base === 'absolute') absolute = resolve(path);
+    else throw new Error(`Unsupported Xcode workspace reference: ${location}`);
+    if (kind === 'Group' && !selfClosing) groups.push(absolute);
+    if (kind === 'FileRef' && absolute.endsWith('.xcodeproj')) projects.add(absolute);
+  }
+  return [...projects];
+}
+
+async function workspaceOwner(
+  projectDir: string,
+  filePath: string,
+  workspace: string,
+  cache?: Map<string, string | undefined>,
+): Promise<{ project: string; target: string } | undefined> {
+  const root = await realpath(projectDir);
+  async function readWorkspaceFile(path: string): Promise<string> {
+    const key = JSON.stringify(['workspace-file', path]);
+    const cached = cache?.get(key);
+    if (cached !== undefined) return cached;
+    const canonical = await realpath(path);
+    const withinRoot = relative(root, canonical);
+    if (withinRoot === '..' || withinRoot.startsWith('../') || isAbsolute(withinRoot)) {
+      throw new Error(`Xcode workspace metadata is outside the selected project directory: ${path}`);
+    }
+    const text = await readFile(canonical, 'utf8');
+    cache?.set(key, text);
+    return text;
+  }
+  const workspacePath = resolve(projectDir, workspace);
+  const contents = await readWorkspaceFile(join(workspacePath, 'contents.xcworkspacedata'));
+  const owners: { project: string; target: string }[] = [];
+  const unreadable: { project: string; error: unknown }[] = [];
+  for (const project of workspaceProjects(contents, dirname(workspacePath))) {
+    let text: string;
+    try {
+      text = await readWorkspaceFile(join(project, 'project.pbxproj'));
+    } catch (error) {
+      // A project that is missing (a Pods project not generated yet) or outside the
+      // root must not hide the files the other projects own. It is never queried.
+      unreadable.push({ project, error });
+      continue;
+    }
+    const withinProject = relative(dirname(project), resolve(projectDir, filePath));
+    const target = targetForFile(text, withinProject);
+    if (target) owners.push({ project, target });
+  }
+  if (owners.length > 1) {
+    throw new Error(`More than one workspace project compiles ${filePath}: ${owners.map((o) => `${o.project} (${o.target})`).join(', ')}`);
+  }
+  // Nothing readable owns the file, so an unreadable project may. Say why we
+  // cannot tell rather than report the file as unowned.
+  if (owners.length === 0 && unreadable.length > 0) throw unreadable[0].error;
+  for (const { project, error } of unreadable) {
+    const key = JSON.stringify(['skipped-project', project]);
+    if (cache?.has(key)) continue;
+    cache?.set(key, undefined);
+    console.warn(`warning: skipping Xcode workspace project ${project}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return owners[0];
+}
+
+export type BuildSettingsFailure = 'command-failed' | 'invalid-response' | 'target-not-found' | 'ambiguous-target' | 'module-name-missing' | 'configuration-not-found' | 'ambiguous-configuration';
+
+const MESSAGE_OUTPUT_LIMIT = 4000;
+
+/** Keeps the head and tail of long command output; the error's properties hold it whole. */
+function excerpt(text: string): string {
+  if (text.length <= MESSAGE_OUTPUT_LIMIT) return text;
+  const half = MESSAGE_OUTPUT_LIMIT / 2;
+  return `${text.slice(0, half)}\n… ${text.length - MESSAGE_OUTPUT_LIMIT} characters omitted; the full output is on the error's stdout and stderr …\n${text.slice(-half)}`;
+}
+
+/**
+ * Diagnostics are retained for callers and also printed by the CLI's Error handler.
+ * The message abridges long output (a settings dump runs to megabytes).
+ */
+export class BuildSettingsError extends Error {
+  readonly command = 'xcodebuild';
+
+  constructor(
+    readonly reason: BuildSettingsFailure,
+    readonly target: string,
+    readonly args: string[],
+    readonly cwd: string,
+    readonly stdout: string,
+    readonly stderr: string,
+    readonly exitCode?: string | number | null,
+    options?: ErrorOptions,
+  ) {
+    super([
+      `Phonebook build-settings lookup failed [${reason}] for target ${JSON.stringify(target)}.`,
+      `Command: xcodebuild ${args.map((arg) => JSON.stringify(arg)).join(' ')}`,
+      `Directory: ${cwd}`,
+      ...(exitCode !== undefined ? [`Exit: ${exitCode}`] : []),
+      ...(stdout ? [`stdout:\n${excerpt(stdout)}`] : []),
+      ...(stderr ? [`stderr:\n${excerpt(stderr)}`] : []),
+    ].join('\n'), options);
+    this.name = 'BuildSettingsError';
+  }
+}
+
+type TargetSettings = { target?: string; buildSettings?: Record<string, unknown> };
+
+async function buildSettings(
+  projectDir: string,
+  targetName: string,
+  args: string[],
+): Promise<{ settings: TargetSettings[]; stdout: string; stderr: string }> {
+  let stdout: string;
+  let stderr: string;
+  try {
+    ({ stdout, stderr } = await run('xcodebuild', args, { cwd: projectDir, maxBuffer: 32 * 1024 * 1024 }));
+  } catch (cause) {
+    const error = cause as { stdout?: string; stderr?: string; code?: string | number | null };
+    throw new BuildSettingsError('command-failed', targetName, args, projectDir, error.stdout ?? '', error.stderr ?? '', error.code, { cause });
+  }
+  let settings: unknown;
+  try {
+    settings = JSON.parse(stdout);
+    if (!Array.isArray(settings)) throw new Error('Expected an array of target settings');
+  } catch (cause) {
+    throw new BuildSettingsError('invalid-response', targetName, args, projectDir, stdout, stderr, 0, { cause });
+  }
+  const entries = (settings as unknown[]).filter((entry): entry is TargetSettings =>
+    typeof entry === 'object' && entry !== null,
+  );
+  return { settings: entries, stdout, stderr };
+}
+
+async function testConfiguration(
+  projectDir: string,
+  selection: { project?: string; workspace?: string; scheme?: string },
+): Promise<string> {
+  // `test -showBuildSettings` inspects the Test action without running tests.
+  // A direct target query would otherwise use the project's default (often
+  // Release), which can have a different PRODUCT_MODULE_NAME from Test/Debug.
+  const args = ['test', '-showBuildSettings', '-json', '-sdk', 'iphonesimulator'];
+  if (selection.workspace) args.push('-workspace', selection.workspace);
+  else if (selection.project) args.push('-project', selection.project);
+  args.push('-scheme', selection.scheme!);
+  const target = `scheme ${selection.scheme}`;
+  const { settings, stdout, stderr } = await buildSettings(projectDir, target, args);
+  const configurations = new Set(settings.map((entry) => entry.buildSettings?.CONFIGURATION)
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0));
+  const failure = configurations.size === 0 ? 'configuration-not-found' : configurations.size > 1 ? 'ambiguous-configuration' : undefined;
+  if (failure) throw new BuildSettingsError(failure, target, args, projectDir, stdout, stderr, 0);
+  return [...configurations][0];
 }
 
 async function productModuleName(
   projectDir: string,
   targetName: string,
-  xcodebuildTarget: { project?: string; workspace?: string; scheme?: string },
-): Promise<string | undefined> {
-  const args = ['-showBuildSettings'];
-  if (xcodebuildTarget.workspace) {
-    args.push('-workspace', xcodebuildTarget.workspace);
-    if (xcodebuildTarget.scheme) args.push('-scheme', xcodebuildTarget.scheme);
-  } else if (xcodebuildTarget.project) {
-    args.push('-project', xcodebuildTarget.project);
-  }
+  project?: string,
+  configuration?: string,
+): Promise<string> {
+  // Match the renderer's iOS Simulator SDK, including SDK-conditional module names.
+  const args = ['-showBuildSettings', '-json', '-sdk', 'iphonesimulator'];
+  if (project) args.push('-project', project);
   args.push('-target', targetName);
-  try {
-    const { stdout } = await run('xcodebuild', args, { cwd: projectDir, maxBuffer: 32 * 1024 * 1024 });
-    const match = stdout.match(/^\s*PRODUCT_MODULE_NAME = (.+)$/m);
-    return match ? match[1].trim() : undefined;
-  } catch {
-    return undefined;
+  if (configuration) args.push('-configuration', configuration);
+  const { settings, stdout, stderr } = await buildSettings(projectDir, targetName, args);
+  const targets = settings.filter((entry) => entry.target === targetName);
+  const failure = targets.length === 0 ? 'target-not-found' : targets.length > 1 ? 'ambiguous-target' : undefined;
+  if (failure) throw new BuildSettingsError(failure, targetName, args, projectDir, stdout, stderr, 0);
+  const module = targets[0].buildSettings?.PRODUCT_MODULE_NAME;
+  if (typeof module !== 'string' || !module.trim()) {
+    throw new BuildSettingsError('module-name-missing', targetName, args, projectDir, stdout, stderr, 0);
   }
+  return module.trim();
 }
