@@ -543,8 +543,9 @@ export function sourcesBuildPhaseOwner(pbxproj: string, filePath: string): strin
  *
  * The module name is the first half of a #Preview's synthesized fileID
  * ("<Module>/<File>.swift"), which is what SnapshotPreviews matches its filter
- * patterns against. `cache` retains one Test-action configuration query and one
- * module query per project/target/configuration for the requested files.
+ * patterns against. `cache` retains one Test-action configuration query, one
+ * module query per project/target/configuration, and one read of each workspace
+ * project file for the requested files.
  */
 export async function moduleForFile(
   pbxproj: string,
@@ -569,7 +570,7 @@ export async function moduleForFile(
   // framework linked by the app can be absent, as SignalUI is from Signal's
   // settings. Resolve the file's project first, then query that exact target.
   const owner = xcodebuildTarget.workspace
-    ? await workspaceOwner(projectDir, filePath, xcodebuildTarget.workspace)
+    ? await workspaceOwner(projectDir, filePath, xcodebuildTarget.workspace, cache)
     : {
         project: xcodebuildTarget.project,
         target: targetForFile(pbxproj, withinConfiguredProject),
@@ -626,21 +627,36 @@ async function workspaceOwner(
   projectDir: string,
   filePath: string,
   workspace: string,
+  cache?: Map<string, string | undefined>,
 ): Promise<{ project: string; target: string } | undefined> {
   const root = await realpath(projectDir);
   async function readWorkspaceFile(path: string): Promise<string> {
+    const key = JSON.stringify(['workspace-file', path]);
+    const cached = cache?.get(key);
+    if (cached !== undefined) return cached;
     const canonical = await realpath(path);
     const withinRoot = relative(root, canonical);
     if (withinRoot === '..' || withinRoot.startsWith('../') || isAbsolute(withinRoot)) {
       throw new Error(`Xcode workspace metadata is outside the selected project directory: ${path}`);
     }
-    return readFile(canonical, 'utf8');
+    const text = await readFile(canonical, 'utf8');
+    cache?.set(key, text);
+    return text;
   }
   const workspacePath = resolve(projectDir, workspace);
   const contents = await readWorkspaceFile(join(workspacePath, 'contents.xcworkspacedata'));
   const owners: { project: string; target: string }[] = [];
+  const unreadable: { project: string; error: unknown }[] = [];
   for (const project of workspaceProjects(contents, dirname(workspacePath))) {
-    const text = await readWorkspaceFile(join(project, 'project.pbxproj'));
+    let text: string;
+    try {
+      text = await readWorkspaceFile(join(project, 'project.pbxproj'));
+    } catch (error) {
+      // A project that is missing (a Pods project not generated yet) or outside the
+      // root must not hide the files the other projects own. It is never queried.
+      unreadable.push({ project, error });
+      continue;
+    }
     const withinProject = relative(dirname(project), resolve(projectDir, filePath));
     const target = targetForFile(text, withinProject);
     if (target) owners.push({ project, target });
@@ -648,12 +664,33 @@ async function workspaceOwner(
   if (owners.length > 1) {
     throw new Error(`More than one workspace project compiles ${filePath}: ${owners.map((o) => `${o.project} (${o.target})`).join(', ')}`);
   }
+  // Nothing readable owns the file, so an unreadable project may. Say why we
+  // cannot tell rather than report the file as unowned.
+  if (owners.length === 0 && unreadable.length > 0) throw unreadable[0].error;
+  for (const { project, error } of unreadable) {
+    const key = JSON.stringify(['skipped-project', project]);
+    if (cache?.has(key)) continue;
+    cache?.set(key, undefined);
+    console.warn(`warning: skipping Xcode workspace project ${project}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return owners[0];
 }
 
 export type BuildSettingsFailure = 'command-failed' | 'invalid-response' | 'target-not-found' | 'ambiguous-target' | 'module-name-missing' | 'configuration-not-found' | 'ambiguous-configuration';
 
-/** Diagnostics are retained for callers and also printed by the CLI's Error handler. */
+const MESSAGE_OUTPUT_LIMIT = 4000;
+
+/** Keeps the head and tail of long command output; the error's properties hold it whole. */
+function excerpt(text: string): string {
+  if (text.length <= MESSAGE_OUTPUT_LIMIT) return text;
+  const half = MESSAGE_OUTPUT_LIMIT / 2;
+  return `${text.slice(0, half)}\n… ${text.length - MESSAGE_OUTPUT_LIMIT} characters omitted; the full output is on the error's stdout and stderr …\n${text.slice(-half)}`;
+}
+
+/**
+ * Diagnostics are retained for callers and also printed by the CLI's Error handler.
+ * The message abridges long output (a settings dump runs to megabytes).
+ */
 export class BuildSettingsError extends Error {
   readonly command = 'xcodebuild';
 
@@ -672,8 +709,8 @@ export class BuildSettingsError extends Error {
       `Command: xcodebuild ${args.map((arg) => JSON.stringify(arg)).join(' ')}`,
       `Directory: ${cwd}`,
       ...(exitCode !== undefined ? [`Exit: ${exitCode}`] : []),
-      ...(stdout ? [`stdout:\n${stdout}`] : []),
-      ...(stderr ? [`stderr:\n${stderr}`] : []),
+      ...(stdout ? [`stdout:\n${excerpt(stdout)}`] : []),
+      ...(stderr ? [`stderr:\n${excerpt(stderr)}`] : []),
     ].join('\n'), options);
     this.name = 'BuildSettingsError';
   }

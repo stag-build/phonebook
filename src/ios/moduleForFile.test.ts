@@ -143,6 +143,15 @@ process.exit(response.code || 0);
     expect(error.message).toContain('xcodebuild: error: broken project\n');
   });
 
+  it('abridges long output in the message but keeps it whole on the error', async () => {
+    const stdout = 'x'.repeat(8000);
+    await respond(stdout);
+    const error = await moduleForFile(app, root, 'App/Card.swift', { project: 'App.xcodeproj' }).catch((error) => error);
+    expect(error).toMatchObject({ reason: 'invalid-response', stdout });
+    expect(error.message.length).toBeLessThan(5000);
+    expect(error.message).toContain('4000 characters omitted');
+  });
+
   it.each([
     ['invalid JSON', 'not JSON', 'invalid-response'],
     ['a non-array response', {}, 'invalid-response'],
@@ -164,6 +173,54 @@ process.exit(response.code || 0);
   it('keeps missing ownership distinct from build-settings failures', async () => {
     expect(await moduleForFile(app, root, 'Unowned/Card.swift', { workspace: 'App.xcworkspace' })).toBeUndefined();
     await expect(readFile(join(root, 'calls'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('skips a missing or out-of-root workspace project when a readable one owns the file', async () => {
+    const external = await mkdtemp(join(tmpdir(), 'phonebook-external-'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await mkdir(join(external, 'Shared.xcodeproj'));
+      await writeFile(join(external, 'Shared.xcodeproj', 'project.pbxproj'), project('Shared', 'Shared'));
+      await writeFile(join(root, 'App.xcworkspace', 'contents.xcworkspacedata'), `<Workspace>
+  <FileRef location="group:App.xcodeproj"/>
+  <FileRef location="group:Pods/Pods.xcodeproj"/>
+  <FileRef location="absolute:${join(external, 'Shared.xcodeproj')}"/>
+</Workspace>`);
+      await respond([{ target: 'App', buildSettings: { PRODUCT_MODULE_NAME: 'App', CONFIGURATION: 'Debug' } }]);
+      const cache = new Map<string, string | undefined>();
+      for (const file of ['App/Card.swift', 'App/Button.swift']) {
+        expect(await moduleForFile(app, root, file, { workspace: 'App.xcworkspace', scheme: 'App' }, cache)).toBe('App');
+      }
+      expect(warn.mock.calls.map(([message]) => message)).toEqual([
+        expect.stringContaining('Pods.xcodeproj'),
+        expect.stringContaining('outside the selected project directory'),
+      ]);
+      const commands = (await calls()).map((call) => call.join(' ')).join('\n');
+      expect(commands).not.toContain(external);
+      expect(commands).not.toContain('Pods');
+    } finally {
+      warn.mockRestore();
+      await rm(external, { recursive: true, force: true });
+    }
+  });
+
+  it('reports the unreadable project instead of "unowned" when no readable project owns the file', async () => {
+    await writeFile(join(root, 'App.xcworkspace', 'contents.xcworkspacedata'), `<Workspace>
+  <FileRef location="group:App.xcodeproj"/>
+  <FileRef location="group:Pods/Pods.xcodeproj"/>
+</Workspace>`);
+    await expect(moduleForFile(app, root, 'Unowned/Card.swift', { workspace: 'App.xcworkspace' })).rejects.toThrow(/ENOENT.*Pods\.xcodeproj/);
+    await expect(readFile(join(root, 'calls'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reuses project files read earlier in the same run', async () => {
+    await respond([{ target: 'DesignKit', buildSettings: { PRODUCT_MODULE_NAME: 'Kit', CONFIGURATION: 'Debug' } }]);
+    const selection = { workspace: 'App.xcworkspace', scheme: 'App' };
+    const cache = new Map<string, string | undefined>();
+    expect(await moduleForFile(app, root, 'Libraries/DesignKit/Card.swift', selection, cache)).toBe('Kit');
+    await writeFile(join(root, 'Libraries', 'DesignKit.xcodeproj', 'project.pbxproj'), project('Other', 'Other'));
+    expect(await moduleForFile(app, root, 'Libraries/DesignKit/Button.swift', selection, cache)).toBe('Kit');
+    expect(await moduleForFile(app, root, 'Libraries/DesignKit/Button.swift', selection)).toBeUndefined();
   });
 
   it('rejects project metadata symlinks outside the selected root before running commands', async () => {
